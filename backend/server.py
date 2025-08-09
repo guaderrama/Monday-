@@ -113,6 +113,15 @@ async def ensure_workspace(ctx: Dict[str, str]):
         for i in range(1, 7):
             await db.items.insert_one(Item(boardId=board.id, groupId=g1.id, name=f"Task {i}", order=i, createdBy=ctx["user_id"], status="Todo").model_dump())
 
+# helper to remove Mongo _id
+def strip_mongo(doc: Dict[str, Any]) -> Dict[str, Any]:
+    if not isinstance(doc, dict):
+        return doc
+    d = dict(doc)
+    d.pop("_id", None)
+    return d
+
+
 # -----------------------------
 # API ROUTES
 # -----------------------------

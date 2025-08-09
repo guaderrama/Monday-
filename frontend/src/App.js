@@ -81,7 +81,7 @@ function Topbar({ wsOk }) {
   );
 }
 
-function BoardView({ board }) {
+function BoardView({ board, onRealtimeChange }) {
   const [groups, setGroups] = useState([]);
   const [items, setItems] = useState([]);
   const [selected, setSelected] = useState(null);

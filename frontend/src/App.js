@@ -67,7 +67,7 @@ function Sidebar({ boards, currentBoardId, onSelect }) {
   )
 }
 
-function Topbar({ wsOk }) {
+function Topbar({ wsOk = false }) {
   return (
     <div className="topbar">
       <div className="search">

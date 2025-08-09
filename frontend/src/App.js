@@ -59,18 +59,17 @@ function Sidebar({ boards, currentBoardId, onSelect }) {
   )
 }
 
-function ViewSelector({ boardId, members, state, setState, onRefreshViews }) {
+function ViewSelector({ boardId, state, setState }) {
   const [views, setViews] = useState([]);
   const [selectedId, setSelectedId] = useState(() => new URLSearchParams(window.location.search).get('viewId') || localStorage.getItem(`wb.viewId:${boardId}`) || '');
 
   const fetchViews = async () => {
     const h = getAuthHeaders(); const r = await axios.get(`${API}/boards/${boardId}/views`, { headers: h }); setViews(r.data);
   };
-  useEffect(() => { fetchViews(); onRefreshViews && onRefreshViews(fetchViews); }, [boardId]);
+  useEffect(() => { fetchViews(); }, [boardId]);
   useEffect(() => { if (selectedId) localStorage.setItem(`wb.viewId:${boardId}`, selectedId); else localStorage.removeItem(`wb.viewId:${boardId}`); const url = new URL(window.location.href); if (selectedId) url.searchParams.set('viewId', selectedId); else url.searchParams.delete('viewId'); window.history.replaceState({}, '', url.toString()); }, [selectedId, boardId]);
 
   useEffect(() => {
-    // If selectedId matches a custom view, apply its config
     const v = views.find(x => x.id === selectedId);
     if (v) {
       const cfg = v.configJSON || {};
@@ -86,48 +85,20 @@ function ViewSelector({ boardId, members, state, setState, onRefreshViews }) {
   }, [selectedId, views]);
 
   const currentConfig = () => ({
-    filters: {
-      text: state.text || '',
-      statuses: state.statuses || STATUSES,
-      assigneeId: state.assigneeFilter === 'all' ? null : state.assigneeFilter,
-    },
+    filters: { text: state.text || '', statuses: state.statuses || STATUSES, assigneeId: state.assigneeFilter === 'all' ? null : state.assigneeFilter },
     sort: state.sort || { field: 'order', dir: 'asc' },
     showDeleted: !!state.showDeleted,
     ui: { collapsedGroups: state.collapsedGroups || [] },
   });
 
-  const saveAsNew = async () => {
-    const name = prompt('View name?'); if (!name) return; const h = getAuthHeaders();
-    const body = { name, type: state.type, configJSON: currentConfig() };
-    const r = await axios.post(`${API}/boards/${boardId}/views`, body, { headers: h });
-    setViews((arr) => [...arr, r.data]); setSelectedId(r.data.id);
-  };
-
-  const saveChanges = async () => {
-    if (!selectedId) { await saveAsNew(); return; }
-    const h = getAuthHeaders(); const body = { configJSON: currentConfig(), type: state.type };
-    const r = await axios.patch(`${API}/views/${selectedId}`, body, { headers: h });
-    setViews((arr) => arr.map(v => v.id === r.data.id ? r.data : v));
-  };
-
-  const renameView = async () => {
-    const v = views.find(x => x.id === selectedId); if (!v) return;
-    const name = prompt('Rename view', v.name); if (!name) return;
-    const h = getAuthHeaders(); const r = await axios.patch(`${API}/views/${selectedId}`, { name }, { headers: h });
-    setViews((arr) => arr.map(v => v.id === r.data.id ? r.data : v));
-  };
-
-  const deleteView = async () => {
-    if (!selectedId) return; if (!confirm('Delete this view?')) return; const h = getAuthHeaders(); await axios.delete(`${API}/views/${selectedId}`, { headers: h }); setViews((arr) => arr.filter(v => v.id !== selectedId)); setSelectedId('');
-  };
+  const saveAsNew = async () => { const name = prompt('View name?'); if (!name) return; const h = getAuthHeaders(); const body = { name, type: state.type, configJSON: currentConfig() }; const r = await axios.post(`${API}/boards/${boardId}/views`, body, { headers: h }); setViews((arr) => [...arr, r.data]); setSelectedId(r.data.id); };
+  const saveChanges = async () => { if (!selectedId) { await saveAsNew(); return; } const h = getAuthHeaders(); const body = { configJSON: currentConfig(), type: state.type }; const r = await axios.patch(`${API}/views/${selectedId}`, body, { headers: h }); setViews((arr) => arr.map(v => v.id === r.data.id ? r.data : v)); };
+  const renameView = async () => { const v = views.find(x => x.id === selectedId); if (!v) return; const name = prompt('Rename view', v.name); if (!name) return; const h = getAuthHeaders(); const r = await axios.patch(`${API}/views/${selectedId}`, { name }, { headers: h }); setViews((arr) => arr.map(v => v.id === r.data.id ? r.data : v)); };
+  const deleteView = async () => { if (!selectedId) return; if (!confirm('Delete this view?')) return; const h = getAuthHeaders(); await axios.delete(`${API}/views/${selectedId}`, { headers: h }); setViews((arr) => arr.filter(v => v.id !== selectedId)); setSelectedId(''); };
 
   return (
     <div style={{ display:'flex', gap:8, alignItems:'center' }}>
-      <Select value={selectedId || (state.type === 'kanban' ? 'kanban-default' : 'table-default')} onValueChange={(val)=>{
-        if (val === 'table-default') { setSelectedId(''); setState(s => ({ ...s, type: 'table', text:'', statuses: STATUSES, assigneeFilter:'all', showDeleted:false })); return; }
-        if (val === 'kanban-default') { setSelectedId(''); setState(s => ({ ...s, type: 'kanban', text:'', statuses: STATUSES, assigneeFilter:'all', showDeleted:false })); return; }
-        setSelectedId(val);
-      }}>
+      <Select value={selectedId || (state.type === 'kanban' ? 'kanban-default' : 'table-default')} onValueChange={(val)=>{ if (val === 'table-default') { setSelectedId(''); setState(s => ({ ...s, type: 'table' })); return; } if (val === 'kanban-default') { setSelectedId(''); setState(s => ({ ...s, type: 'kanban' })); return; } setSelectedId(val); }}>
         <SelectTrigger className="w-[240px]"><SelectValue placeholder="Select view" /></SelectTrigger>
         <SelectContent>
           <SelectItem value="table-default">Table (Default)</SelectItem>
@@ -151,6 +122,38 @@ function BoardView({ board, onRealtimeChange }) {
   const [state, setState] = useState(() => ({ type: (localStorage.getItem('wb.view') || 'kanban'), text:'', statuses: STATUSES, assigneeFilter:'all', sort:{ field:'order', dir:'asc' }, showDeleted: localStorage.getItem(`wb.showDeleted:${board?.id}`)==='1', collapsedGroups: [] }));
   const [focusId, setFocusId] = useState(null);
   const { connected } = useWebSocket(board?.id);
+  const searchRef = useRef(null);
+  const [pendingText, setPendingText] = useState('');
+  const [debounceTimer, setDebounceTimer] = useState(null);
+
+  // Load q/statuses from URL once
+  useEffect(() => {
+    const url = new URL(window.location.href);
+    const q = url.searchParams.get('q');
+    const sts = url.searchParams.get('statuses');
+    setState(s => ({ ...s, text: q || s.text, statuses: sts ? sts.split(',').filter(Boolean) : s.statuses }));
+    setPendingText(q || '');
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Sync URL with search/status chips
+  useEffect(() => {
+    const url = new URL(window.location.href);
+    if (state.text) url.searchParams.set('q', state.text); else url.searchParams.delete('q');
+    if (state.statuses && state.statuses.length && state.statuses.length < STATUSES.length) url.searchParams.set('statuses', state.statuses.join(',')); else url.searchParams.delete('statuses');
+    window.history.replaceState({}, '', url.toString());
+  }, [state.text, state.statuses]);
+
+  // Keyboard: '/' focus, Esc clears
+  useEffect(() => {
+    const onKey = (e) => {
+      if (e.key === '/' && !e.metaKey && !e.ctrlKey && !e.altKey) { e.preventDefault(); searchRef.current?.focus(); }
+      if (e.key === 'Escape' && document.activeElement === searchRef.current) { setPendingText(''); setState(s=>({ ...s, text:'' })); }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
+
   useEffect(() => { onRealtimeChange?.(connected); }, [connected]);
 
   const refetch = React.useCallback(() => {
@@ -180,9 +183,10 @@ function BoardView({ board, onRealtimeChange }) {
 
   const matchesFilters = (it) => {
     if (!state.statuses.includes(it.status)) return false;
+    const txt = (state.text || '').trim().toLowerCase();
+    if (txt && !(`${it.name||''}`.toLowerCase().includes(txt))) return false;
     if (state.assigneeFilter === 'unassigned' && it.assigneeId) return false;
     if (state.assigneeFilter !== 'all' && state.assigneeFilter !== 'unassigned' && it.assigneeId !== state.assigneeFilter) return false;
-    if (state.text && !(`${it.name||''}`.toLowerCase().includes(state.text.toLowerCase()))) return false;
     return true;
   };
 
@@ -197,25 +201,56 @@ function BoardView({ board, onRealtimeChange }) {
 
   const [quickAdd, setQuickAdd] = useState({});
 
-  // View header
+  const initials = (name) => (name || '').split(' ').map(w => w[0]).join('').toUpperCase().slice(0,2) || '•';
+  const memberById = (id) => members.find(m => m.id === id);
+
+  const highlight = (name, query) => {
+    if (!query) return name;
+    const q = query.toLowerCase(); const n = (name || '').toString(); const idx = n.toLowerCase().indexOf(q);
+    if (idx === -1) return n;
+    return (<span>{n.slice(0, idx)}<mark>{n.slice(idx, idx+q.length)}</mark>{n.slice(idx+q.length)}</span>);
+  };
+
+  const exportCSV = async () => {
+    // If search or statuses filter active (not all), build CSV on client to match visible set
+    const statusesActive = state.statuses.length && state.statuses.length < STATUSES.length;
+    const textActive = !!(state.text && state.text.trim());
+    const filtered = items.filter(it => (state.showDeleted || !it.deleted) && matchesFilters(it));
+    if (statusesActive || textActive) {
+      const gmap = Object.fromEntries(groups.map(g => [g.id, g.name]));
+      const mby = Object.fromEntries(members.map(m => [m.id, m.displayName || m.username]));
+      const rows = [
+        ["id","name","groupId","groupName","status","order","assigneeId","assigneeName","dueDate","createdAt","updatedAt","deleted"],
+        ...filtered.map(it => [
+          it.id, it.name, it.groupId, gmap[it.groupId] || '', it.status, it.order,
+          it.assigneeId || '', mby[it.assigneeId] || '', it.dueDate ? new Date(it.dueDate).toISOString().slice(0,10) : '',
+              it.createdAt, it.updatedAt, !!it.deleted
+        ])
+      ];
+      const csv = rows.map(r => r.map(c => (c==null?'':String(c))).join(',')).join('\n');
+      const blob = new Blob([csv], { type: 'text/csv' }); const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = `items_${board.id}.csv`; document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
+      return;
+    }
+    // else delegate to backend (still includes includeDeleted/assignee filters)
+    const h = getAuthHeaders(); const params = { boardId: board.id, includeDeleted: state.showDeleted ? 1 : 0 };
+    if (state.assigneeFilter === 'unassigned') params.unassigned = 1; else if (state.assigneeFilter !== 'all') params.assigneeId = state.assigneeFilter;
+    const res = await axios.get(`${API}/export/items.csv`, { params, headers: h, responseType: 'blob' });
+    const blob = new Blob([res.data], { type: 'text/csv' }); const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = `items_${board.id}.csv`; document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
+  };
+
+  // Debounced search input handler
+  const onSearchChange = (v) => {
+    setPendingText(v);
+    if (debounceTimer) clearTimeout(debounceTimer);
+    const t = setTimeout(() => setState(s => ({ ...s, text: v })), 200);
+    setDebounceTimer(t);
+  };
+
   const HeaderControls = (
     <div style={{ display:'flex', gap:12, alignItems:'center', flexWrap:'wrap' }}>
-      <ViewSelector boardId={board.id} members={members} state={state} setState={setState} />
-      <div className="small">Realtime: <span className={"ws-indicator" + (connected ? " ok" : "")} style={{ display:'inline-block', verticalAlign:'middle' }} /></div>
-      <div style={{ display:'flex', gap:8, alignItems:'center' }}>
-        <Label className="small">Show deleted</Label>
-        <Switch checked={state.showDeleted} onCheckedChange={(v)=>setState(s=>({ ...s, showDeleted:v }))} />
-      </div>
-      <div style={{ display:'flex', gap:6, alignItems:'center' }}>
-        <span className="small">Assignee</span>
-        <Select value={state.assigneeFilter} onValueChange={(val)=>setState(s=>({ ...s, assigneeFilter: val }))}>
-          <SelectTrigger className="w-[160px]"><SelectValue placeholder="All" /></SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">All</SelectItem>
-            <SelectItem value="unassigned">Unassigned</SelectItem>
-            {members.map(m => <SelectItem key={m.id} value={m.id}>{m.displayName || m.username}</SelectItem>)}
-          </SelectContent>
-        </Select>
+      <ViewSelector boardId={board.id} state={state} setState={setState} />
+      <div className="search" style={{ minWidth:260, maxWidth:420 }}>
+        <Input ref={searchRef} placeholder="Search items… (press /)" value={pendingText} onChange={(e)=> onSearchChange(e.target.value)} />
       </div>
       <div style={{ display:'flex', gap:6, alignItems:'center' }}>
         <span className="small">Statuses</span>
@@ -225,24 +260,20 @@ function BoardView({ board, onRealtimeChange }) {
           ))}
         </div>
       </div>
-      <div style={{ display:'flex', gap:6, alignItems:'center' }}>
-        <Input placeholder="Search name…" value={state.text} onChange={(e)=> setState(s=> ({ ...s, text: e.target.value }))} />
+      {(state.text || (state.statuses.length && state.statuses.length < STATUSES.length)) && (
+        <Button className="btn" onClick={()=>{ setPendingText(''); setState(s=> ({ ...s, text:'', statuses: STATUSES })); }}>Clear all</Button>
+      )}
+      <div style={{ display:'flex', gap:8, alignItems:'center' }}>
+        <div className="small">Realtime: <span className={"ws-indicator" + (connected ? " ok" : "")} style={{ display:'inline-block', verticalAlign:'middle' }} /></div>
       </div>
       <div style={{ display:'flex', gap:8, alignItems:'center' }}>
-        <Button className="btn" onClick={async ()=>{
-          const h = getAuthHeaders();
-          const params = { boardId: board.id, includeDeleted: state.showDeleted ? 1 : 0 };
-          if (state.assigneeFilter === 'unassigned') params.unassigned = 1; else if (state.assigneeFilter !== 'all') params.assigneeId = state.assigneeFilter;
-          if (state.statuses && state.statuses.length && state.statuses.length < STATUSES.length) params.statuses = state.statuses.join(',');
-          if (state.text) params.text = state.text;
-          const res = await axios.get(`${API}/export/items.csv`, { params, headers: h, responseType: 'blob' });
-          const blob = new Blob([res.data], { type: 'text/csv' }); const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = `items_${board.id}.csv`; document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
-        }}>Export CSV</Button>
+        <Button className="btn" onClick={exportCSV}>Export CSV</Button>
       </div>
     </div>
   );
 
   const statuses = STATUSES;
+
   const KanbanView = (
     <div className="content">
       <div className="board-area">
@@ -263,10 +294,10 @@ function BoardView({ board, onRealtimeChange }) {
                       const lane = laneItems(g.id, st); let prev = null, next = null; if (idx > 0) prev = lane[idx-1]?.order ?? null; if (idx < lane.length) next = lane[idx]?.order ?? null; let newOrder; if (prev == null && next == null) newOrder = Date.now(); else if (prev == null) newOrder = next - 1; else if (next == null) newOrder = prev + 1; else newOrder = (prev + next) / 2; moveItem(it, g.id, st, newOrder); maybeCompact(g.id, st, prev, next, idx);
                     }}>
                     {laneItems(g.id, st).map(it => (
-                      <div key={it.id} className="kb-card" tabIndex={0} onFocus={()=>setFocusId(it.id)}>{/* render minimal card */}
+                      <div key={it.id} className="kb-card" tabIndex={0} onFocus={()=>setFocusId(it.id)}>
                         <div style={{ display:'flex', gap:8, alignItems:'center' }}>
-                          <Avatar style={{ width:18, height:18 }}><AvatarFallback>{((members.find(m=>m.id===it.assigneeId)?.displayName||'U')[0]||'•')}</AvatarFallback></Avatar>
-                          <span>{it.name}</span>
+                          <Avatar style={{ width:18, height:18 }}><AvatarFallback>{initials((memberById(it.assigneeId)?.displayName)||'U')}</AvatarFallback></Avatar>
+                          <span>{highlight(it.name, state.text)}</span>
                         </div>
                       </div>
                     ))}
@@ -298,9 +329,9 @@ function BoardView({ board, onRealtimeChange }) {
               <TableBody>
                 {items.filter(i=>i.groupId===g.id && (state.showDeleted || !i.deleted) && matchesFilters(i)).sort((a,b)=> (a.order||0)-(b.order||0)).map(it => (
                   <TableRow key={it.id}>
-                    <TableCell>{it.name}</TableCell>
+                    <TableCell>{highlight(it.name, state.text)}</TableCell>
                     <TableCell>{it.status}</TableCell>
-                    <TableCell>{members.find(m=>m.id===it.assigneeId)?.displayName || '—'}</TableCell>
+                    <TableCell>{memberById(it.assigneeId)?.displayName || '—'}</TableCell>
                     <TableCell className="small">{it.dueDate ? new Date(it.dueDate).toLocaleDateString() : '—'}</TableCell>
                   </TableRow>
                 ))}

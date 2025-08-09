@@ -41,10 +41,6 @@ logger = logging.getLogger(__name__)
 # -----------------------------
 # Simple header-based auth/tenant
 # -----------------------------
-# X-Workspace-Id: string UUID per tenant
-# X-User-Id: string UUID or name pseudo-id
-# X-User-Name: optional display name
-
 async def get_ctx(workspace_id: Optional[str] = Header(None, alias="X-Workspace-Id"),
                   user_id: Optional[str] = Header(None, alias="X-User-Id")) -> Dict[str, str]:
     if not workspace_id or not user_id:
@@ -82,8 +78,9 @@ class Item(BaseModel):
     order: float = 0
     createdBy: Optional[str] = None
     createdAt: datetime = Field(default_factory=datetime.utcnow)
-    status: str = "Todo"  # simplified V1 column for Kanban
+    status: str = "Todo"
     dueDate: Optional[datetime] = None
+    assignee: Optional[str] = None
 
 class Comment(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
@@ -98,10 +95,8 @@ class Comment(BaseModel):
 async def ensure_workspace(ctx: Dict[str, str]):
     ws = await db.workspaces.find_one({"id": ctx["workspace_id"]})
     if not ws:
-        # Auto-provision demo workspace for quick start
         ws_obj = Workspace(id=ctx["workspace_id"], name="Demo Workspace", ownerId=ctx["user_id"]) 
         await db.workspaces.insert_one(ws_obj.model_dump())
-        # Seed a demo board/groups/items
         board = Board(workspaceId=ws_obj.id, name="Projects", description="Sample board")
         await db.boards.insert_one(board.model_dump())
         g1 = Group(boardId=board.id, name="Backlog", order=1)
@@ -109,8 +104,7 @@ async def ensure_workspace(ctx: Dict[str, str]):
         g3 = Group(boardId=board.id, name="Done", order=3)
         for g in [g1, g2, g3]:
             await db.groups.insert_one(g.model_dump())
-        # items
-        for i in range(1, 7):
+        for i in range(1, 6+1):
             await db.items.insert_one(Item(boardId=board.id, groupId=g1.id, name=f"Task {i}", order=i, createdBy=ctx["user_id"], status="Todo").model_dump())
 
 # helper to remove Mongo _id
@@ -120,7 +114,6 @@ def strip_mongo(doc: Dict[str, Any]) -> Dict[str, Any]:
     d = dict(doc)
     d.pop("_id", None)
     return d
-
 
 # -----------------------------
 # API ROUTES
@@ -134,7 +127,6 @@ async def bootstrap(ctx: Dict[str, str] = Depends(get_ctx)):
     await ensure_workspace(ctx)
     ws_id = ctx["workspace_id"]
     boards = [strip_mongo(b) for b in await db.boards.find({"workspaceId": ws_id}).to_list(50)]
-    # Return boards with groups
     for b in boards:
         groups = [strip_mongo(g) for g in await db.groups.find({"boardId": b["id"]}).to_list(100)]
         b["groups"] = groups
@@ -172,13 +164,16 @@ class ItemCreate(BaseModel):
     name: str
     groupId: str
     order: float = 0
+    status: Optional[str] = None
+    assignee: Optional[str] = None
+    dueDate: Optional[datetime] = None
 
 @api.post("/boards/{board_id}/items", response_model=Item)
 async def create_item(board_id: str, item: ItemCreate, ctx: Dict[str, str] = Depends(get_ctx)):
     await ensure_workspace(ctx)
-    it = Item(boardId=board_id, groupId=item.groupId, name=item.name, order=item.order, createdBy=ctx["user_id"]) 
+    it = Item(boardId=board_id, groupId=item.groupId, name=item.name, order=item.order, createdBy=ctx["user_id"],
+              status=item.status or "Todo", assignee=item.assignee, dueDate=item.dueDate)
     await db.items.insert_one(it.model_dump())
-    # realtime event
     await broadcast_board(board_id, {"type": "item.created", "item": it.model_dump()})
     return it
 
@@ -188,6 +183,7 @@ class ItemUpdate(BaseModel):
     status: Optional[str] = None
     dueDate: Optional[datetime] = None
     order: Optional[float] = None
+    assignee: Optional[str] = None
 
 @api.get("/boards/{board_id}/items", response_model=List[Item])
 async def list_items(board_id: str, ctx: Dict[str, str] = Depends(get_ctx)):
@@ -248,11 +244,9 @@ async def broadcast_board(board_id: str, payload: Dict[str, Any]):
 
 @app.websocket("/api/ws/boards/{board_id}")
 async def ws_board(websocket: WebSocket, board_id: str):
-    # Expect headers for workspace/user; no strict check for speed but available for future
     await manager.connect(board_id, websocket)
     try:
         while True:
-            # Echo pings or ignore incoming client messages
             _ = await websocket.receive_text()
     except WebSocketDisconnect:
         manager.disconnect(board_id, websocket)

@@ -3,11 +3,16 @@ import "./App.css";
 import axios from "axios";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "./components/ui/table";
 import { Button } from "./components/ui/button";
+import { Input } from "./components/ui/input";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./components/ui/select";
+import { Calendar } from "./components/ui/calendar";
 
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
 const API = `${BACKEND_URL}/api`;
 
-// Header-based auth per your choice (1B)
+const STATUSES = ["Todo", "Doing", "Done"];
+
+// Header-based auth
 const getAuthHeaders = () => {
   let ws = localStorage.getItem("wb.ws");
   let uid = localStorage.getItem("wb.uid");
@@ -26,21 +31,13 @@ function useWebSocket(boardId) {
       const u = new URL(BACKEND_URL);
       const wsProto = u.protocol === "https:" ? "wss" : "ws";
       url = `${wsProto}://${u.host}/api/ws/boards/${boardId}`;
-    } catch (e) {
-      console.error("Invalid BACKEND_URL", BACKEND_URL);
-      return;
-    }
+    } catch (e) { console.error("Invalid BACKEND_URL", BACKEND_URL); return; }
     const ws = new WebSocket(url);
     wsRef.current = ws;
     ws.onopen = () => setConnected(true);
     ws.onclose = () => setConnected(false);
     ws.onerror = () => setConnected(false);
-    ws.onmessage = (ev) => {
-      try {
-        const msg = JSON.parse(ev.data);
-        window.dispatchEvent(new CustomEvent("wb:ws", { detail: msg }));
-      } catch {}
-    };
+    ws.onmessage = (ev) => { try { const msg = JSON.parse(ev.data); window.dispatchEvent(new CustomEvent("wb:ws", { detail: msg })); } catch {} };
     const ping = setInterval(() => { try { ws.send("ping"); } catch {} }, 15000);
     return () => { clearInterval(ping); try { ws.close(); } catch {} };
   }, [boardId]);
@@ -85,6 +82,49 @@ function Topbar({ wsOk = false, view, setView }) {
   );
 }
 
+function EditableText({ value, onCommit, className }) {
+  const [v, setV] = useState(value || "");
+  const [orig, setOrig] = useState(value || "");
+  useEffect(() => { setV(value || ""); setOrig(value || ""); }, [value]);
+  return (
+    <Input
+      className={className}
+      value={v}
+      onChange={(e)=>setV(e.target.value)}
+      onBlur={async ()=>{ if (v !== orig) await onCommit(v); }}
+      onKeyDown={(e)=>{ if (e.key === 'Enter') { e.currentTarget.blur(); } if (e.key === 'Escape') { setV(orig); e.currentTarget.blur(); } }}
+    />
+  );
+}
+
+function StatusSelect({ value, onChange }) {
+  return (
+    <Select value={value} onValueChange={onChange}>
+      <SelectTrigger className="w-[110px]">
+        <SelectValue placeholder="Status" />
+      </SelectTrigger>
+      <SelectContent>
+        {STATUSES.map(s => <SelectItem key={s} value={s}>{s}</SelectItem>)}
+      </SelectContent>
+    </Select>
+  );
+}
+
+function DatePickerInline({ value, onChange }) {
+  const [open, setOpen] = useState(false);
+  const dateVal = value ? new Date(value) : undefined;
+  return (
+    <div style={{ position:'relative' }}>
+      <Button className="btn" onClick={()=>setOpen(o=>!o)}>{dateVal ? dateVal.toLocaleDateString() : 'Set due'}</Button>
+      {open && (
+        <div style={{ position:'absolute', zIndex:20, top:'110%', left:0, background:'rgba(0,0,0,0.85)', border:'1px solid var(--wb-border)', borderRadius:12, padding:8 }}>
+          <Calendar mode="single" selected={dateVal} onSelect={(d)=>{ setOpen(false); onChange(d ? new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate())) : null); }} />
+        </div>
+      )}
+    </div>
+  );
+}
+
 function BoardView({ board, onRealtimeChange, view }) {
   const [groups, setGroups] = useState([]);
   const [items, setItems] = useState([]);
@@ -99,57 +139,21 @@ function BoardView({ board, onRealtimeChange, view }) {
     axios.get(`${API}/boards/${board.id}/items`, { headers: h }).then((r) => setItems(r.data));
   }, [board?.id]);
 
-  // Load groups + items
-  useEffect(() => {
-    if (!board) return;
-    refetch();
-  }, [board?.id, refetch]);
+  useEffect(() => { if (board) refetch(); }, [board?.id, refetch]);
+  useEffect(() => { if (!board || connected) return; const t = setInterval(() => refetch(), 5000); return () => clearInterval(t); }, [connected, board?.id, refetch]);
 
-  // If websocket disconnected, poll items every 5s as fallback
-  useEffect(() => {
-    if (!board) return;
-    if (connected) return; // no polling when live
-    const t = setInterval(() => refetch(), 5000);
-    return () => clearInterval(t);
-  }, [connected, board?.id, refetch]);
-
-  // Realtime events
   useEffect(() => {
     const handler = (ev) => {
-      const msg = ev.detail;
-      if (!msg || !board) return;
-      if (msg.type === "item.created" && msg.item.boardId === board.id) {
-        setItems((prev) => [...prev, msg.item]);
-      }
-      if (msg.type === "item.updated" && msg.item.boardId === board.id) {
-        setItems((prev) => prev.map(i => i.id === msg.item.id ? msg.item : i));
-      }
+      const msg = ev.detail; if (!msg || !board) return;
+      if (msg.type === "item.created" && msg.item.boardId === board.id) setItems(prev => [...prev, msg.item]);
+      if (msg.type === "item.updated" && msg.item.boardId === board.id) setItems(prev => prev.map(i => i.id === msg.item.id ? msg.item : i));
     };
     window.addEventListener("wb:ws", handler);
     return () => window.removeEventListener("wb:ws", handler);
   }, [board?.id]);
 
   const groupsById = useMemo(() => Object.fromEntries(groups.map(g => [g.id, g])), [groups]);
-  const laneItems = (groupId, status) => items
-    .filter(it => it.groupId === groupId && it.status === status)
-    .sort((a,b) => (a.order||0)-(b.order||0));
-
-  const createItem = async (groupId) => {
-    const name = prompt("Item name?");
-    if (!name) return;
-    const h = getAuthHeaders();
-    try {
-      const res = await axios.post(`${API}/boards/${board.id}/items`, { name, groupId, order: Date.now() }, { headers: h });
-      const it = res.data;
-      setItems(prev => [...prev, it]);
-    } catch (e) { console.error("create item failed", e); }
-  };
-
-  const cycleStatus = (item) => {
-    const order = ["Todo", "Doing", "Done"];
-    const idx = order.indexOf(item.status);
-    return order[(idx + 1) % order.length];
-  };
+  const laneItems = (groupId, status) => items.filter(it => it.groupId === groupId && it.status === status).sort((a,b) => (a.order||0)-(b.order||0));
 
   const updateItem = async (item, patch) => {
     const h = getAuthHeaders();
@@ -157,31 +161,97 @@ function BoardView({ board, onRealtimeChange, view }) {
     return res.data;
   };
 
+  const createItem = async (groupId, name, statusOpt) => {
+    const h = getAuthHeaders();
+    const payload = { name, groupId, order: Date.now(), status: statusOpt };
+    const res = await axios.post(`${API}/boards/${board.id}/items`, payload, { headers: h });
+    const it = res.data; setItems(prev => [...prev, it]); return it;
+  };
+
   const moveItem = async (item, toGroupId, toStatus) => {
-    // compute order at end of lane
     const target = laneItems(toGroupId, toStatus);
     const newOrder = target.length ? (target[target.length - 1].order || 0) + 1 : Date.now();
-    // optimistic update
     setItems(prev => prev.map(i => i.id === item.id ? { ...i, groupId: toGroupId, status: toStatus, order: newOrder } : i));
-    try {
-      const upd = await updateItem(item, { groupId: toGroupId, status: toStatus, order: newOrder });
-      setItems(prev => prev.map(i => i.id === upd.id ? upd : i));
-    } catch (e) {
-      console.error("move failed", e);
-      refetch();
-    }
+    try { const upd = await updateItem(item, { groupId: toGroupId, status: toStatus, order: newOrder }); setItems(prev => prev.map(i => i.id === upd.id ? upd : i)); } catch (e) { console.error("move failed", e); refetch(); }
   };
 
   const addGroup = async () => {
     const name = prompt("Group name?") || "New Group";
     const h = getAuthHeaders();
-    try {
-      const res = await axios.post(`${API}/boards/${board.id}/groups`, { name, order: (groups[groups.length-1]?.order || 0) + 1 }, { headers: h });
-      setGroups(prev => [...prev, res.data]);
-    } catch (e) { console.error("create group failed", e); }
+    try { const res = await axios.post(`${API}/boards/${board.id}/groups`, { name, order: (groups[groups.length-1]?.order || 0) + 1 }, { headers: h }); setGroups(prev => [...prev, res.data]); } catch (e) { console.error("create group failed", e); }
   };
 
-  if (!board) return <div style={{ padding: 20 }}>Select a board from the left.</div>;
+  const KanbanCard = ({ it }) => {
+    const [local, setLocal] = useState(it);
+    useEffect(() => { setLocal(it); }, [it.id, it.name, it.status, it.assignee, it.dueDate]);
+    const commit = async (patch) => {
+      setItems(prev => prev.map(x => x.id === it.id ? { ...x, ...patch } : x));
+      const upd = await updateItem(it, patch);
+      setItems(prev => prev.map(x => x.id === it.id ? upd : x));
+    };
+    return (
+      <div className="kb-card" draggable data-item-id={it.id} onDragStart={(e)=>{ e.dataTransfer.setData('text/plain', it.id); }}>
+        <div style={{ display:'flex', flexDirection:'column', gap:6, width:'60%' }}>
+          <EditableText value={local.name} onCommit={(v)=>commit({ name: v })} />
+          <div className="small">Assignee</div>
+          <EditableText value={local.assignee || ''} onCommit={(v)=>commit({ assignee: v || null })} />
+        </div>
+        <div style={{ display:'flex', flexDirection:'column', gap:8, alignItems:'flex-end' }}>
+          <StatusSelect value={local.status} onChange={(v)=>commit({ status: v })} />
+          <DatePickerInline value={local.dueDate} onChange={(d)=>commit({ dueDate: d ? new Date(d).toISOString() : null })} />
+        </div>
+      </div>
+    );
+  };
+
+  const statuses = STATUSES;
+  const KanbanView = (
+    <div className="content">
+      <div className="board-area">
+        <div className="board-header">
+          <div className="board-title">{board.name}</div>
+          <div style={{ display:'flex', gap:8, alignItems:'center' }}>
+            <Button className="btn" onClick={addGroup}>+ New group</Button>
+            <div className="small">Realtime: <span className={"ws-indicator" + (connected ? " ok" : "")} style={{ display:'inline-block', verticalAlign:'middle' }} /></div>
+          </div>
+        </div>
+        <div className="kanban">
+          {groups.map(g => (
+            <div className="kb-swin" key={g.id}>
+              <div className="kb-head">{g.name} <span className="small">{items.filter(i=>i.groupId===g.id).length} items</span></div>
+              <div className="kb-row">
+                {statuses.map(st => (
+                  <div
+                    key={st}
+                    className="kb-lane"
+                    data-lane={st}
+                    data-group={g.id}
+                    onDragOver={(e)=>{ e.preventDefault(); e.currentTarget.classList.add('dragover'); }}
+                    onDragLeave={(e)=>{ e.currentTarget.classList.remove('dragover'); }}
+                    onDrop={(e)=>{
+                      e.preventDefault(); e.currentTarget.classList.remove('dragover');
+                      const itemId = e.dataTransfer.getData('text/plain');
+                      const it = items.find(x => x.id === itemId); if (!it) return; moveItem(it, g.id, st);
+                    }}
+                  >
+                    {laneItems(g.id, st).map(it => (
+                      <KanbanCard key={it.id} it={it} />
+                    ))}
+                    <div style={{ display:'flex', justifyContent:'center', marginTop:8 }}>
+                      <Button className="btn" onClick={async () => { const name = prompt('Card title?'); if (!name) return; await createItem(g.id, name, st); }}>+ Add</Button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+      <div className="item-panel">
+        <div className="small">Drag items between lanes. Inline edit fields save on blur/Enter. Esc cancels.</div>
+      </div>
+    </div>
+  );
 
   const TableView = (
     <div className="content">
@@ -205,17 +275,17 @@ function BoardView({ board, onRealtimeChange, view }) {
                 {items.filter(i=>i.groupId===g.id).sort((a,b)=> (a.order||0)-(b.order||0)).map(it => (
                   <TableRow key={it.id} onClick={() => setSelected(it)} style={{ cursor:'pointer' }}>
                     <TableCell>
-                      <input defaultValue={it.name} onBlur={async (e) => { if (e.target.value !== it.name) await updateItem(it, { name: e.target.value }); }} style={{ width:'100%', background:'transparent', border:'1px solid var(--wb-border)', borderRadius:8, padding:'6px 8px', color:'var(--wb-text)' }} />
+                      <Input defaultValue={it.name} onBlur={async (e) => { if (e.target.value !== it.name) { const upd = await updateItem(it, { name: e.target.value }); setItems(prev => prev.map(x => x.id === upd.id ? upd : x)); } }} />
                     </TableCell>
                     <TableCell>
-                      <span className={`status-pill status-${it.status}`} onClick={async () => { const next = cycleStatus(it); const updated = await updateItem(it, { status: next }); setItems(prev => prev.map(x => x.id === updated.id ? updated : x)); }} style={{ cursor:'pointer' }}>{it.status}</span>
+                      <StatusSelect value={it.status} onChange={async (v)=>{ const upd = await updateItem(it, { status: v }); setItems(prev => prev.map(x => x.id === upd.id ? upd : x)); }} />
                     </TableCell>
                     <TableCell className="small">{it.dueDate ? new Date(it.dueDate).toLocaleDateString() : "—"}</TableCell>
                   </TableRow>
                 ))}
                 <TableRow>
                   <TableCell colSpan={3}>
-                    <Button className="btn" onClick={() => createItem(g.id)}>+ Add item</Button>
+                    <Button className="btn" onClick={async ()=>{ const name = prompt('Item name?'); if (!name) return; await createItem(g.id, name, 'Todo'); }}>+ Add item</Button>
                   </TableCell>
                 </TableRow>
               </TableBody>
@@ -245,69 +315,7 @@ function BoardView({ board, onRealtimeChange, view }) {
     </div>
   );
 
-  const statuses = ["Todo","Doing","Done"];
-  const KanbanView = (
-    <div className="content">
-      <div className="board-area">
-        <div className="board-header">
-          <div className="board-title">{board.name}</div>
-          <div style={{ display:'flex', gap:8, alignItems:'center' }}>
-            <Button className="btn" onClick={addGroup}>+ New group</Button>
-            <div className="small">Realtime: <span className={"ws-indicator" + (connected ? " ok" : "")} style={{ display:'inline-block', verticalAlign:'middle' }} /></div>
-          </div>
-        </div>
-        <div className="kanban">
-          {groups.map(g => (
-            <div className="kb-swin" key={g.id}>
-              <div className="kb-head">{g.name} <span className="small">{items.filter(i=>i.groupId===g.id).length} items</span></div>
-              <div className="kb-row">
-                {statuses.map(st => (
-                  <div
-                    key={st}
-                    className="kb-lane"
-                    data-lane={st}
-                    data-group={g.id}
-                    onDragOver={(e)=>{ e.preventDefault(); e.currentTarget.classList.add('dragover'); }}
-                    onDragLeave={(e)=>{ e.currentTarget.classList.remove('dragover'); }}
-                    onDrop={(e)=>{
-                      e.preventDefault();
-                      e.currentTarget.classList.remove('dragover');
-                      const itemId = e.dataTransfer.getData('text/plain');
-                      const it = items.find(x => x.id === itemId);
-                      if (!it) return;
-                      moveItem(it, g.id, st);
-                    }}
-                  >
-                    {laneItems(g.id, st).map(it => (
-                      <div
-                        key={it.id}
-                        className="kb-card"
-                        draggable
-                        data-item-id={it.id}
-                        onDragStart={(e)=>{ e.dataTransfer.setData('text/plain', it.id); }}
-                      >
-                        <div className="title">{it.name}</div>
-                        <div className="pill">{it.status}</div>
-                      </div>
-                    ))}
-                  </div>
-                ))}
-              </div>
-              <div className="kb-actions">
-                <Button className="btn" onClick={() => createItem(g.id)}>+ Add item</Button>
-              </div>
-            </div>
-          ))}
-        </div>
-      </div>
-      <div className="item-panel">
-        {!selected ? (
-          <div className="small">Drag items between lanes. Select an item in Table view to see details.</div>
-        ) : null}
-      </div>
-    </div>
-  );
-
+  if (!board) return <div style={{ padding: 20 }}>Select a board from the left.</div>;
   return view === 'kanban' ? KanbanView : TableView;
 }
 
@@ -318,21 +326,15 @@ function App() {
   const [wsOk, setWsOk] = useState(false);
   const [view, setView] = useState(() => localStorage.getItem('wb.view') || 'table');
 
-  // Bootstrap workspace and boards
   useEffect(() => {
     const h = getAuthHeaders();
     axios.get(`${API}/bootstrap`, { headers: h }).then((r) => {
       setBoards(r.data.boards || []);
-      if (r.data.boards?.length) {
-        setCurrentBoardId(r.data.boards[0].id);
-      }
+      if (r.data.boards?.length) setCurrentBoardId(r.data.boards[0].id);
     }).catch((e) => console.error("bootstrap failed", e));
   }, []);
 
-  useEffect(() => {
-    setCurrentBoard(boards.find(b => b.id === currentBoardId) || null);
-  }, [boards, currentBoardId]);
-
+  useEffect(() => { setCurrentBoard(boards.find(b => b.id === currentBoardId) || null); }, [boards, currentBoardId]);
   useEffect(() => { localStorage.setItem('wb.view', view); }, [view]);
 
   return (

@@ -80,7 +80,7 @@ class Item(BaseModel):
     createdAt: datetime = Field(default_factory=datetime.utcnow)
     status: str = "Todo"
     dueDate: Optional[datetime] = None
-    assignee: Optional[str] = None
+    assigneeId: Optional[str] = None
 
 class Comment(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
@@ -165,14 +165,14 @@ class ItemCreate(BaseModel):
     groupId: str
     order: float = 0
     status: Optional[str] = None
-    assignee: Optional[str] = None
+    assigneeId: Optional[str] = None
     dueDate: Optional[datetime] = None
 
 @api.post("/boards/{board_id}/items", response_model=Item)
 async def create_item(board_id: str, item: ItemCreate, ctx: Dict[str, str] = Depends(get_ctx)):
     await ensure_workspace(ctx)
     it = Item(boardId=board_id, groupId=item.groupId, name=item.name, order=item.order, createdBy=ctx["user_id"],
-              status=item.status or "Todo", assignee=item.assignee, dueDate=item.dueDate)
+              status=item.status or "Todo", assigneeId=item.assigneeId, dueDate=item.dueDate)
     await db.items.insert_one(it.model_dump())
     await broadcast_board(board_id, {"type": "item.created", "item": it.model_dump()})
     return it
@@ -183,7 +183,7 @@ class ItemUpdate(BaseModel):
     status: Optional[str] = None
     dueDate: Optional[datetime] = None
     order: Optional[float] = None
-    assignee: Optional[str] = None
+    assigneeId: Optional[str] = None
 
 @api.get("/boards/{board_id}/items", response_model=List[Item])
 async def list_items(board_id: str, ctx: Dict[str, str] = Depends(get_ctx)):
@@ -206,7 +206,6 @@ async def update_item(item_id: str, patch: ItemUpdate, ctx: Dict[str, str] = Dep
         return Item(**upd)
     raise HTTPException(status_code=404, detail="Item not found")
 
-# Order compaction for a lane (groupId + status)
 class LanePayload(BaseModel):
     groupId: str
     status: str
@@ -222,7 +221,6 @@ async def compact_lane(board_id: str, body: LanePayload, ctx: Dict[str, str] = D
             d["order"] = new_order
             changed.append(strip_mongo(d))
         new_order += 1000.0
-    # broadcast updates
     for doc in changed:
         await broadcast_board(board_id, {"type": "item.updated", "item": doc})
     return {"compacted": len(changed)}

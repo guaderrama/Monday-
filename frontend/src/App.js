@@ -67,7 +67,7 @@ function Sidebar({ boards, currentBoardId, onSelect }) {
   )
 }
 
-function Topbar({ wsOk = false }) {
+function Topbar({ wsOk = false, view, setView }) {
   return (
     <div className="topbar">
       <div className="search">
@@ -75,13 +75,17 @@ function Topbar({ wsOk = false }) {
       </div>
       <div className="header-actions">
         <div className={"ws-indicator" + (wsOk ? " ok" : "")} title={wsOk ? "Live" : "Disconnected"} />
+        <div className="view-toggle">
+          <button className={view === 'table' ? 'active' : ''} onClick={() => setView('table')}>Table</button>
+          <button className={view === 'kanban' ? 'active' : ''} onClick={() => setView('kanban')}>Kanban</button>
+        </div>
         <Button className="btn">New board</Button>
       </div>
     </div>
   );
 }
 
-function BoardView({ board, onRealtimeChange }) {
+function BoardView({ board, onRealtimeChange, view }) {
   const [groups, setGroups] = useState([]);
   const [items, setItems] = useState([]);
   const [selected, setSelected] = useState(null);
@@ -126,16 +130,9 @@ function BoardView({ board, onRealtimeChange }) {
   }, [board?.id]);
 
   const groupsById = useMemo(() => Object.fromEntries(groups.map(g => [g.id, g])), [groups]);
-  const itemsByGroup = useMemo(() => {
-    const map = {};
-    for (const g of groups) map[g.id] = [];
-    for (const it of items) {
-      if (!map[it.groupId]) map[it.groupId] = [];
-      map[it.groupId].push(it);
-    }
-    for (const k of Object.keys(map)) map[k] = map[k].sort((a,b) => (a.order||0)-(b.order||0));
-    return map;
-  }, [groups, items]);
+  const laneItems = (groupId, status) => items
+    .filter(it => it.groupId === groupId && it.status === status)
+    .sort((a,b) => (a.order||0)-(b.order||0));
 
   const createItem = async (groupId) => {
     const name = prompt("Item name?");
@@ -160,9 +157,33 @@ function BoardView({ board, onRealtimeChange }) {
     return res.data;
   };
 
+  const moveItem = async (item, toGroupId, toStatus) => {
+    // compute order at end of lane
+    const target = laneItems(toGroupId, toStatus);
+    const newOrder = target.length ? (target[target.length - 1].order || 0) + 1 : Date.now();
+    // optimistic update
+    setItems(prev => prev.map(i => i.id === item.id ? { ...i, groupId: toGroupId, status: toStatus, order: newOrder } : i));
+    try {
+      const upd = await updateItem(item, { groupId: toGroupId, status: toStatus, order: newOrder });
+      setItems(prev => prev.map(i => i.id === upd.id ? upd : i));
+    } catch (e) {
+      console.error("move failed", e);
+      refetch();
+    }
+  };
+
+  const addGroup = async () => {
+    const name = prompt("Group name?") || "New Group";
+    const h = getAuthHeaders();
+    try {
+      const res = await axios.post(`${API}/boards/${board.id}/groups`, { name, order: (groups[groups.length-1]?.order || 0) + 1 }, { headers: h });
+      setGroups(prev => [...prev, res.data]);
+    } catch (e) { console.error("create group failed", e); }
+  };
+
   if (!board) return <div style={{ padding: 20 }}>Select a board from the left.</div>;
 
-  return (
+  const TableView = (
     <div className="content">
       <div className="board-area">
         <div className="board-header">
@@ -171,7 +192,7 @@ function BoardView({ board, onRealtimeChange }) {
         </div>
         {groups.map(g => (
           <div key={g.id} className="group">
-            <h4>{g.name} • {itemsByGroup[g.id]?.length || 0}</h4>
+            <h4>{g.name} • {items.filter(i=>i.groupId===g.id).length}</h4>
             <Table className="table">
               <TableHeader>
                 <TableRow>
@@ -181,7 +202,7 @@ function BoardView({ board, onRealtimeChange }) {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {(itemsByGroup[g.id] || []).map(it => (
+                {items.filter(i=>i.groupId===g.id).sort((a,b)=> (a.order||0)-(b.order||0)).map(it => (
                   <TableRow key={it.id} onClick={() => setSelected(it)} style={{ cursor:'pointer' }}>
                     <TableCell>
                       <input defaultValue={it.name} onBlur={async (e) => { if (e.target.value !== it.name) await updateItem(it, { name: e.target.value }); }} style={{ width:'100%', background:'transparent', border:'1px solid var(--wb-border)', borderRadius:8, padding:'6px 8px', color:'var(--wb-text)' }} />
@@ -223,13 +244,79 @@ function BoardView({ board, onRealtimeChange }) {
       </div>
     </div>
   );
+
+  const statuses = ["Todo","Doing","Done"];
+  const KanbanView = (
+    <div className="content">
+      <div className="board-area">
+        <div className="board-header">
+          <div className="board-title">{board.name}</div>
+          <div style={{ display:'flex', gap:8, alignItems:'center' }}>
+            <Button className="btn" onClick={addGroup}>+ New group</Button>
+            <div className="small">Realtime: <span className={"ws-indicator" + (connected ? " ok" : "")} style={{ display:'inline-block', verticalAlign:'middle' }} /></div>
+          </div>
+        </div>
+        <div className="kanban">
+          {groups.map(g => (
+            <div className="kb-swin" key={g.id}>
+              <div className="kb-head">{g.name} <span className="small">{items.filter(i=>i.groupId===g.id).length} items</span></div>
+              <div className="kb-row">
+                {statuses.map(st => (
+                  <div
+                    key={st}
+                    className="kb-lane"
+                    data-lane={st}
+                    data-group={g.id}
+                    onDragOver={(e)=>{ e.preventDefault(); e.currentTarget.classList.add('dragover'); }}
+                    onDragLeave={(e)=>{ e.currentTarget.classList.remove('dragover'); }}
+                    onDrop={(e)=>{
+                      e.preventDefault();
+                      e.currentTarget.classList.remove('dragover');
+                      const itemId = e.dataTransfer.getData('text/plain');
+                      const it = items.find(x => x.id === itemId);
+                      if (!it) return;
+                      moveItem(it, g.id, st);
+                    }}
+                  >
+                    {laneItems(g.id, st).map(it => (
+                      <div
+                        key={it.id}
+                        className="kb-card"
+                        draggable
+                        data-item-id={it.id}
+                        onDragStart={(e)=>{ e.dataTransfer.setData('text/plain', it.id); }}
+                      >
+                        <div className="title">{it.name}</div>
+                        <div className="pill">{it.status}</div>
+                      </div>
+                    ))}
+                  </div>
+                ))}
+              </div>
+              <div className="kb-actions">
+                <Button className="btn" onClick={() => createItem(g.id)}>+ Add item</Button>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+      <div className="item-panel">
+        {!selected ? (
+          <div className="small">Drag items between lanes. Select an item in Table view to see details.</div>
+        ) : null}
+      </div>
+    </div>
+  );
+
+  return view === 'kanban' ? KanbanView : TableView;
 }
 
 function App() {
-  const [wsOk, setWsOk] = useState(false);
   const [boards, setBoards] = useState([]);
   const [currentBoardId, setCurrentBoardId] = useState(null);
   const [currentBoard, setCurrentBoard] = useState(null);
+  const [wsOk, setWsOk] = useState(false);
+  const [view, setView] = useState(() => localStorage.getItem('wb.view') || 'table');
 
   // Bootstrap workspace and boards
   useEffect(() => {
@@ -246,12 +333,14 @@ function App() {
     setCurrentBoard(boards.find(b => b.id === currentBoardId) || null);
   }, [boards, currentBoardId]);
 
+  useEffect(() => { localStorage.setItem('wb.view', view); }, [view]);
+
   return (
     <div className="app-shell">
       <Sidebar boards={boards} currentBoardId={currentBoardId} onSelect={setCurrentBoardId} />
       <main style={{ display:'flex', flexDirection:'column', minWidth:0 }}>
-        <Topbar wsOk={wsOk} />
-        <BoardView board={currentBoard} onRealtimeChange={setWsOk} />
+        <Topbar wsOk={wsOk} view={view} setView={setView} />
+        <BoardView board={currentBoard} onRealtimeChange={setWsOk} view={view} />
       </main>
     </div>
   );

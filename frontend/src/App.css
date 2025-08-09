@@ -27,7 +27,10 @@ body { background: var(--wb-bg); color: var(--wb-text); font-family: 'Figtree', 
 .topbar { display:flex; align-items:center; justify-content:space-between; padding: 14px 20px; border-bottom: 1px solid var(--wb-border); backdrop-filter: blur(12px); position: sticky; top:0; z-index:5; }
 .search { flex:1; max-width: 520px; }
 .search input { width:100%; background: var(--wb-panel); color: var(--wb-text); border:1px solid var(--wb-border); height:40px; border-radius: 12px; padding:0 14px; outline:none; }
-.header-actions { display:flex; gap:8px; }
+.header-actions { display:flex; gap:8px; align-items:center; }
+.view-toggle { display:flex; gap:8px; padding:2px; border-radius:10px; background: rgba(255,255,255,0.06); border:1px solid var(--wb-border); }
+.view-toggle button { background: transparent; border:none; color: var(--wb-muted); padding:6px 10px; border-radius:8px; cursor:pointer; }
+.view-toggle button.active { background: var(--wb-accent); color: white; }
 
 .content { height: calc(100vh - 56px); overflow: hidden; display:grid; grid-template-columns: 1fr 360px; }
 .board-area { height: 100%; overflow: auto; padding: 16px 20px; }
@@ -53,3 +56,17 @@ body { background: var(--wb-bg); color: var(--wb-text); font-family: 'Figtree', 
 .btn:hover { background: #255fd5; }
 
 .small { font-size:12px; color: var(--wb-muted); }
+
+/* Kanban */
+.kanban { display:flex; flex-direction:column; gap:12px; }
+.kb-swin { border:1px solid var(--wb-border); border-radius:12px; overflow:hidden; }
+.kb-head { display:flex; align-items:center; justify-content:space-between; padding:8px 12px; border-bottom:1px solid var(--wb-border); color: var(--wb-muted); font-weight:600; font-size:13px; }
+.kb-row { display:grid; grid-template-columns: repeat(3, 1fr); gap:12px; padding:12px; }
+.kb-lane { min-height:140px; background: rgba(255,255,255,0.02); border:1px dashed var(--wb-border); border-radius:10px; padding:8px; display:flex; flex-direction:column; gap:8px; }
+.kb-lane.dragover { outline: 2px solid var(--wb-accent); }
+.kb-card { background: rgba(255,255,255,0.06); border:1px solid var(--wb-border); border-radius:10px; padding:10px; cursor:grab; display:flex; align-items:center; justify-content:space-between; }
+.kb-card:hover { background: rgba(255,255,255,0.08); }
+.kb-card .title { font-size:14px; }
+.kb-card .pill { font-size:11px; border-radius:999px; border:1px solid var(--wb-border); padding:4px 8px; }
+
+.kb-actions { padding:0 12px 12px; }

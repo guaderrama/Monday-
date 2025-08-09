@@ -139,7 +139,7 @@ async def create_board(body: Dict[str, Any], ctx: Dict[str, str] = Depends(get_c
     return board
 
 @api.get("/boards", response_model=List[Board])
-async def list_boards(ctx: Dict[str, str] = fastapi.Depends(get_ctx)):
+async def list_boards(ctx: Dict[str, str] = Depends(get_ctx)):
     await ensure_workspace(ctx)
     boards = await db.boards.find({"workspaceId": ctx["workspace_id"]}).to_list(100)
     return [Board(**b) for b in boards]

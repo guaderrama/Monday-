@@ -152,7 +152,7 @@ async def create_board(body: Dict[str, Any], ctx: Dict[str, str] = Depends(get_c
 async def list_boards(ctx: Dict[str, str] = Depends(get_ctx)):
     await ensure_workspace(ctx)
     boards = await db.boards.find({"workspaceId": ctx["workspace_id"]}).to_list(100)
-    return [Board(**b) for b in boards]
+    return [Board(**strip_mongo(b)) for b in boards]
 
 # Groups
 @api.post("/boards/{board_id}/groups", response_model=Group)

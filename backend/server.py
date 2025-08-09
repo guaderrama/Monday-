@@ -192,7 +192,7 @@ class ItemUpdate(BaseModel):
 @api.get("/boards/{board_id}/items", response_model=List[Item])
 async def list_items(board_id: str, ctx: Dict[str, str] = Depends(get_ctx)):
     items = await db.items.find({"boardId": board_id}).sort("order", 1).to_list(1000)
-    return [Item(**i) for i in items]
+    return [Item(**strip_mongo(i)) for i in items]
 
 @api.patch("/items/{item_id}", response_model=Item)
 async def update_item(item_id: str, patch: ItemUpdate, ctx: Dict[str, str] = Depends(get_ctx)):

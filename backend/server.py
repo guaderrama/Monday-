@@ -146,14 +146,14 @@ async def list_boards(ctx: Dict[str, str] = Depends(get_ctx)):
 
 # Groups
 @api.post("/boards/{board_id}/groups", response_model=Group)
-async def create_group(board_id: str, body: Dict[str, Any], ctx: Dict[str, str] = fastapi.Depends(get_ctx)):
+async def create_group(board_id: str, body: Dict[str, Any], ctx: Dict[str, str] = Depends(get_ctx)):
     await ensure_workspace(ctx)
     g = Group(boardId=board_id, name=body.get("name", "Group"), order=body.get("order", 0))
     await db.groups.insert_one(g.model_dump())
     return g
 
 @api.get("/boards/{board_id}/groups", response_model=List[Group])
-async def list_groups(board_id: str, ctx: Dict[str, str] = fastapi.Depends(get_ctx)):
+async def list_groups(board_id: str, ctx: Dict[str, str] = Depends(get_ctx)):
     groups = await db.groups.find({"boardId": board_id}).sort("order", 1).to_list(200)
     return [Group(**g) for g in groups]
 
@@ -164,7 +164,7 @@ class ItemCreate(BaseModel):
     order: float = 0
 
 @api.post("/boards/{board_id}/items", response_model=Item)
-async def create_item(board_id: str, item: ItemCreate, ctx: Dict[str, str] = fastapi.Depends(get_ctx)):
+async def create_item(board_id: str, item: ItemCreate, ctx: Dict[str, str] = Depends(get_ctx)):
     await ensure_workspace(ctx)
     it = Item(boardId=board_id, groupId=item.groupId, name=item.name, order=item.order, createdBy=ctx["user_id"]) 
     await db.items.insert_one(it.model_dump())
@@ -180,12 +180,12 @@ class ItemUpdate(BaseModel):
     order: Optional[float] = None
 
 @api.get("/boards/{board_id}/items", response_model=List[Item])
-async def list_items(board_id: str, ctx: Dict[str, str] = fastapi.Depends(get_ctx)):
+async def list_items(board_id: str, ctx: Dict[str, str] = Depends(get_ctx)):
     items = await db.items.find({"boardId": board_id}).sort("order", 1).to_list(1000)
     return [Item(**i) for i in items]
 
 @api.patch("/items/{item_id}", response_model=Item)
-async def update_item(item_id: str, patch: ItemUpdate, ctx: Dict[str, str] = fastapi.Depends(get_ctx)):
+async def update_item(item_id: str, patch: ItemUpdate, ctx: Dict[str, str] = Depends(get_ctx)):
     doc = {k: v for k, v in patch.model_dump(exclude_none=True).items()}
     if not doc:
         found = await db.items.find_one({"id": item_id})

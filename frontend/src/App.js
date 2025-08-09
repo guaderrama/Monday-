@@ -141,7 +141,11 @@ function BoardView({ board, onRealtimeChange }) {
     const name = prompt("Item name?");
     if (!name) return;
     const h = getAuthHeaders();
-    await axios.post(`${API}/boards/${board.id}/items`, { name, groupId, order: Date.now() }, { headers: h });
+    try {
+      const res = await axios.post(`${API}/boards/${board.id}/items`, { name, groupId, order: Date.now() }, { headers: h });
+      const it = res.data;
+      setItems(prev => [...prev, it]);
+    } catch (e) { console.error("create item failed", e); }
   };
 
   const cycleStatus = (item) => {

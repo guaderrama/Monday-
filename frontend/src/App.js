@@ -88,13 +88,26 @@ function BoardView({ board, onRealtimeChange }) {
   const { connected } = useWebSocket(board?.id);
   useEffect(() => { onRealtimeChange?.(connected); }, [connected]);
 
-  // Load groups + items
-  useEffect(() => {
+  const refetch = React.useCallback(() => {
     if (!board) return;
     const h = getAuthHeaders();
     axios.get(`${API}/boards/${board.id}/groups`, { headers: h }).then((r) => setGroups(r.data));
     axios.get(`${API}/boards/${board.id}/items`, { headers: h }).then((r) => setItems(r.data));
   }, [board?.id]);
+
+  // Load groups + items
+  useEffect(() => {
+    if (!board) return;
+    refetch();
+  }, [board?.id, refetch]);
+
+  // If websocket disconnected, poll items every 5s as fallback
+  useEffect(() => {
+    if (!board) return;
+    if (connected) return; // no polling when live
+    const t = setInterval(() => refetch(), 5000);
+    return () => clearInterval(t);
+  }, [connected, board?.id, refetch]);
 
   // Realtime events
   useEffect(() => {

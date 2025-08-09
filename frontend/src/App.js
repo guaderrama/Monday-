@@ -232,8 +232,8 @@ function App() {
     <div className="app-shell">
       <Sidebar boards={boards} currentBoardId={currentBoardId} onSelect={setCurrentBoardId} />
       <main style={{ display:'flex', flexDirection:'column', minWidth:0 }}>
-        <Topbar wsOk={false} />
-        <BoardView board={currentBoard} />
+        <Topbar wsOk={wsOk} />
+        <BoardView board={currentBoard} onRealtimeChange={setWsOk} />
       </main>
     </div>
   );

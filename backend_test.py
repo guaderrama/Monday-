@@ -255,28 +255,33 @@ class WorkBoardsAPITester:
         except Exception as e:
             return self.log_test("WebSocket", False, f"Exception: {str(e)}")
 
-    def run_all_tests(self):
-        """Run all API tests in sequence"""
-        print("🚀 Starting WorkBoards API Smoke Tests")
+    def run_focused_smoke_tests(self):
+        """Run focused smoke tests as requested"""
+        print("🚀 Starting Focused WorkBoards API Smoke Tests")
         print(f"Target URL: {self.base_url}")
         print("=" * 60)
         
-        # Run tests in order
-        self.test_bootstrap()
-        self.test_list_items()
-        self.test_create_item()
-        self.test_update_item()
-        self.test_websocket_realtime()
+        # Run only the requested tests
+        bootstrap_ok = self.test_bootstrap()
+        if not bootstrap_ok:
+            print("❌ Bootstrap failed - stopping tests")
+            return 1
+            
+        create_ok = self.test_create_item()
+        update_ok = self.test_update_item()
+        
+        # Skip websocket test as requested due to missing wsproto
+        print("\n🔍 Skipping WebSocket test (backend lacks wsproto as requested)")
         
         # Print summary
         print("\n" + "=" * 60)
-        print(f"📊 Test Results: {self.tests_passed}/{self.tests_run} tests passed")
+        print(f"📊 Focused Test Results: {self.tests_passed}/{self.tests_run} tests passed")
         
-        if self.tests_passed == self.tests_run:
-            print("🎉 All tests PASSED!")
+        if bootstrap_ok and create_ok and update_ok:
+            print("🎉 All focused smoke tests PASSED!")
             return 0
         else:
-            print("💥 Some tests FAILED!")
+            print("💥 Some focused smoke tests FAILED!")
             return 1
 
 def main():

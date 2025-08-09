@@ -165,7 +165,7 @@ async def create_group(board_id: str, body: Dict[str, Any], ctx: Dict[str, str] 
 @api.get("/boards/{board_id}/groups", response_model=List[Group])
 async def list_groups(board_id: str, ctx: Dict[str, str] = Depends(get_ctx)):
     groups = await db.groups.find({"boardId": board_id}).sort("order", 1).to_list(200)
-    return [Group(**g) for g in groups]
+    return [Group(**strip_mongo(g)) for g in groups]
 
 # Items
 class ItemCreate(BaseModel):

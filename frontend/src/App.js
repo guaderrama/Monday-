@@ -128,7 +128,6 @@ function DatePickerInline({ value, onChange }) {
 function BoardView({ board, onRealtimeChange, view }) {
   const [groups, setGroups] = useState([]);
   const [items, setItems] = useState([]);
-  const [selected, setSelected] = useState(null);
   const { connected } = useWebSocket(board?.id);
   useEffect(() => { onRealtimeChange?.(connected); }, [connected]);
 
@@ -152,7 +151,6 @@ function BoardView({ board, onRealtimeChange, view }) {
     return () => window.removeEventListener("wb:ws", handler);
   }, [board?.id]);
 
-  const groupsById = useMemo(() => Object.fromEntries(groups.map(g => [g.id, g])), [groups]);
   const laneItems = (groupId, status) => items.filter(it => it.groupId === groupId && it.status === status).sort((a,b) => (a.order||0)-(b.order||0));
 
   const updateItem = async (item, patch) => {
@@ -163,22 +161,39 @@ function BoardView({ board, onRealtimeChange, view }) {
 
   const createItem = async (groupId, name, statusOpt) => {
     const h = getAuthHeaders();
-    const payload = { name, groupId, order: Date.now(), status: statusOpt };
-    const res = await axios.post(`${API}/boards/${board.id}/items`, payload, { headers: h });
+    const res = await axios.post(`${API}/boards/${board.id}/items`, { name, groupId, order: Date.now(), status: statusOpt }, { headers: h });
     const it = res.data; setItems(prev => [...prev, it]); return it;
   };
 
-  const moveItem = async (item, toGroupId, toStatus) => {
-    const target = laneItems(toGroupId, toStatus);
-    const newOrder = target.length ? (target[target.length - 1].order || 0) + 1 : Date.now();
-    setItems(prev => prev.map(i => i.id === item.id ? { ...i, groupId: toGroupId, status: toStatus, order: newOrder } : i));
-    try { const upd = await updateItem(item, { groupId: toGroupId, status: toStatus, order: newOrder }); setItems(prev => prev.map(i => i.id === upd.id ? upd : i)); } catch (e) { console.error("move failed", e); refetch(); }
+  const reorderCounter = useRef({});
+  const maybeCompact = async (groupId, status, prev, next, idx) => {
+    const key = `${groupId}:${status}`;
+    reorderCounter.current[key] = (reorderCounter.current[key] || 0) + 1;
+    const gap = next != null && prev != null ? Math.abs(next - prev) : 1;
+    if (gap < 1e-3 || reorderCounter.current[key] % 10 === 0) {
+      try {
+        const h = getAuthHeaders();
+        await axios.post(`${API}/boards/${board.id}/order/compact`, { groupId, status }, { headers: h });
+      } catch {}
+    }
   };
 
-  const addGroup = async () => {
-    const name = prompt("Group name?") || "New Group";
-    const h = getAuthHeaders();
-    try { const res = await axios.post(`${API}/boards/${board.id}/groups`, { name, order: (groups[groups.length-1]?.order || 0) + 1 }, { headers: h }); setGroups(prev => [...prev, res.data]); } catch (e) { console.error("create group failed", e); }
+  const moveItem = async (item, toGroupId, toStatus, desiredOrder = null) => {
+    const target = laneItems(toGroupId, toStatus);
+    let newOrder = desiredOrder;
+    if (newOrder == null) newOrder = target.length ? (target[target.length - 1].order || 0) + 1 : Date.now();
+    setItems(prev => prev.map(i => i.id === item.id ? { ...i, groupId: toGroupId, status: toStatus, order: newOrder } : i));
+    try { const upd = await updateItem(item, { groupId: toGroupId, status: toStatus, order: newOrder }); setItems(prev => prev.map(i => i.id === upd.id ? upd : i)); } catch (e) { refetch(); }
+  };
+
+  const insertionIndexForDrop = (laneEl, groupId, status, clientY) => {
+    const list = laneItems(groupId, status);
+    const cards = Array.from(laneEl.querySelectorAll('.kb-card'));
+    for (let i = 0; i < cards.length; i++) {
+      const r = cards[i].getBoundingClientRect();
+      if (clientY < r.top + r.height / 2) return i;
+    }
+    return list.length; // append
   };
 
   const KanbanCard = ({ it }) => {
@@ -204,6 +219,8 @@ function BoardView({ board, onRealtimeChange, view }) {
     );
   };
 
+  const [quickAdd, setQuickAdd] = useState({});
+
   const statuses = STATUSES;
   const KanbanView = (
     <div className="content">
@@ -211,7 +228,6 @@ function BoardView({ board, onRealtimeChange, view }) {
         <div className="board-header">
           <div className="board-title">{board.name}</div>
           <div style={{ display:'flex', gap:8, alignItems:'center' }}>
-            <Button className="btn" onClick={addGroup}>+ New group</Button>
             <div className="small">Realtime: <span className={"ws-indicator" + (connected ? " ok" : "")} style={{ display:'inline-block', verticalAlign:'middle' }} /></div>
           </div>
         </div>
@@ -231,14 +247,41 @@ function BoardView({ board, onRealtimeChange, view }) {
                     onDrop={(e)=>{
                       e.preventDefault(); e.currentTarget.classList.remove('dragover');
                       const itemId = e.dataTransfer.getData('text/plain');
-                      const it = items.find(x => x.id === itemId); if (!it) return; moveItem(it, g.id, st);
+                      const it = items.find(x => x.id === itemId); if (!it) return;
+                      const idx = insertionIndexForDrop(e.currentTarget, g.id, st, e.clientY);
+                      const lane = laneItems(g.id, st);
+                      let prev = null, next = null;
+                      if (idx > 0) prev = lane[idx-1]?.order ?? null;
+                      if (idx < lane.length) next = lane[idx]?.order ?? null;
+                      let newOrder;
+                      if (prev == null && next == null) newOrder = Date.now();
+                      else if (prev == null) newOrder = next - 1;
+                      else if (next == null) newOrder = prev + 1;
+                      else newOrder = (prev + next) / 2;
+                      moveItem(it, g.id, st, newOrder);
+                      maybeCompact(g.id, st, prev, next, idx);
                     }}
                   >
                     {laneItems(g.id, st).map(it => (
                       <KanbanCard key={it.id} it={it} />
                     ))}
-                    <div style={{ display:'flex', justifyContent:'center', marginTop:8 }}>
-                      <Button className="btn" onClick={async () => { const name = prompt('Card title?'); if (!name) return; await createItem(g.id, name, st); }}>+ Add</Button>
+                    <div style={{ display:'flex', gap:8, alignItems:'center', marginTop:8 }}>
+                      <Input
+                        placeholder="Quick add…"
+                        value={quickAdd[`${g.id}:${st}`] || ''}
+                        onChange={(e)=>setQuickAdd(prev => ({ ...prev, [`${g.id}:${st}`]: e.target.value }))}
+                        onKeyDown={async (e)=>{
+                          if (e.key === 'Enter') {
+                            const title = (quickAdd[`${g.id}:${st}`] || '').trim(); if (!title) return;
+                            setQuickAdd(prev => ({ ...prev, [`${g.id}:${st}`]: '' }));
+                            await createItem(g.id, title, st);
+                          }
+                          if (e.key === 'Escape') {
+                            setQuickAdd(prev => ({ ...prev, [`${g.id}:${st}`]: '' }));
+                          }
+                        }}
+                      />
+                      <Button className="btn" onClick={async ()=>{ const title = (quickAdd[`${g.id}:${st}`] || '').trim(); if (!title) return; setQuickAdd(prev => ({ ...prev, [`${g.id}:${st}`]: '' })); await createItem(g.id, title, st); }}>Add</Button>
                     </div>
                   </div>
                 ))}
@@ -248,17 +291,17 @@ function BoardView({ board, onRealtimeChange, view }) {
         </div>
       </div>
       <div className="item-panel">
-        <div className="small">Drag items between lanes. Inline edit fields save on blur/Enter. Esc cancels.</div>
+        <div className="small">Drag within lane to reorder; Enter saves, Esc cancels. Quick add at lane bottom.</div>
       </div>
     </div>
   );
 
-  const TableView = (
+  if (!board) return <div style={{ padding: 20 }}>Select a board from the left.</div>;
+  return view === 'kanban' ? KanbanView : (
     <div className="content">
       <div className="board-area">
         <div className="board-header">
           <div className="board-title">{board.name}</div>
-          <div className="small">Realtime: <span className={"ws-indicator" + (connected ? " ok" : "")} style={{ display:'inline-block', verticalAlign:'middle' }} /></div>
         </div>
         {groups.map(g => (
           <div key={g.id} className="group">
@@ -273,7 +316,7 @@ function BoardView({ board, onRealtimeChange, view }) {
               </TableHeader>
               <TableBody>
                 {items.filter(i=>i.groupId===g.id).sort((a,b)=> (a.order||0)-(b.order||0)).map(it => (
-                  <TableRow key={it.id} onClick={() => setSelected(it)} style={{ cursor:'pointer' }}>
+                  <TableRow key={it.id} style={{ cursor:'pointer' }}>
                     <TableCell>
                       <Input defaultValue={it.name} onBlur={async (e) => { if (e.target.value !== it.name) { const upd = await updateItem(it, { name: e.target.value }); setItems(prev => prev.map(x => x.id === upd.id ? upd : x)); } }} />
                     </TableCell>
@@ -293,30 +336,9 @@ function BoardView({ board, onRealtimeChange, view }) {
           </div>
         ))}
       </div>
-      <div className="item-panel">
-        {!selected ? (
-          <div className="small">Select an item to see details</div>
-        ) : (
-          <div>
-            <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between' }}>
-              <h3 style={{ margin:0 }}>{selected.name}</h3>
-              <span className={`status-pill status-${selected.status}`}>
-                {selected.status}
-              </span>
-            </div>
-            <div className="small" style={{ marginTop:8 }}>Item ID: {selected.id}</div>
-            <div className="small" style={{ marginTop:8 }}>Group: {groupsById[selected.groupId]?.name}</div>
-            <div className="small" style={{ marginTop:8 }}>Created: {new Date(selected.createdAt).toLocaleString()}</div>
-            <div style={{ height: 1, background: 'var(--wb-border)', margin:'16px 0' }} />
-            <div className="small">Activity (coming soon) • Comments (coming soon)</div>
-          </div>
-        )}
-      </div>
+      <div className="item-panel" />
     </div>
   );
-
-  if (!board) return <div style={{ padding: 20 }}>Select a board from the left.</div>;
-  return view === 'kanban' ? KanbanView : TableView;
 }
 
 function App() {
@@ -324,7 +346,7 @@ function App() {
   const [currentBoardId, setCurrentBoardId] = useState(null);
   const [currentBoard, setCurrentBoard] = useState(null);
   const [wsOk, setWsOk] = useState(false);
-  const [view, setView] = useState(() => localStorage.getItem('wb.view') || 'table');
+  const [view, setView] = useState(() => localStorage.getItem('wb.view') || 'kanban');
 
   useEffect(() => {
     const h = getAuthHeaders();

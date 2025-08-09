@@ -206,6 +206,27 @@ async def update_item(item_id: str, patch: ItemUpdate, ctx: Dict[str, str] = Dep
         return Item(**upd)
     raise HTTPException(status_code=404, detail="Item not found")
 
+# Order compaction for a lane (groupId + status)
+class LanePayload(BaseModel):
+    groupId: str
+    status: str
+
+@api.post("/boards/{board_id}/order/compact")
+async def compact_lane(board_id: str, body: LanePayload, ctx: Dict[str, str] = Depends(get_ctx)):
+    docs = await db.items.find({"boardId": board_id, "groupId": body.groupId, "status": body.status}).sort("order", 1).to_list(2000)
+    new_order = 1000.0
+    changed = []
+    for d in docs:
+        if float(d.get("order", 0)) != float(new_order):
+            await db.items.update_one({"id": d["id"]}, {"$set": {"order": new_order}})
+            d["order"] = new_order
+            changed.append(strip_mongo(d))
+        new_order += 1000.0
+    # broadcast updates
+    for doc in changed:
+        await broadcast_board(board_id, {"type": "item.updated", "item": doc})
+    return {"compacted": len(changed)}
+
 # -----------------------------
 # WebSocket Hub (per board)
 # -----------------------------

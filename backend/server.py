@@ -205,8 +205,9 @@ async def update_item(item_id: str, patch: ItemUpdate, ctx: Dict[str, str] = Dep
     await db.items.update_one({"id": item_id}, {"$set": doc})
     updated = await db.items.find_one({"id": item_id})
     if updated:
-        await broadcast_board(updated["boardId"], {"type": "item.updated", "item": updated})
-        return Item(**updated)
+        upd = strip_mongo(updated)
+        await broadcast_board(upd["boardId"], {"type": "item.updated", "item": upd})
+        return Item(**upd)
     raise HTTPException(status_code=404, detail="Item not found")
 
 # -----------------------------

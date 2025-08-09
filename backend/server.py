@@ -121,7 +121,7 @@ async def root():
     return {"message": "WorkBoards API running"}
 
 @api.get("/bootstrap")
-async def bootstrap(ctx: Dict[str, str] = fastapi.Depends(get_ctx)):
+async def bootstrap(ctx: Dict[str, str] = Depends(get_ctx)):
     await ensure_workspace(ctx)
     ws_id = ctx["workspace_id"]
     boards = await db.boards.find({"workspaceId": ws_id}).to_list(50)

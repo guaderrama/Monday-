@@ -86,6 +86,7 @@ function BoardView({ board, onRealtimeChange }) {
   const [items, setItems] = useState([]);
   const [selected, setSelected] = useState(null);
   const { connected } = useWebSocket(board?.id);
+  useEffect(() => { onRealtimeChange?.(connected); }, [connected]);
 
   // Load groups + items
   useEffect(() => {

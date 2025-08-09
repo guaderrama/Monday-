@@ -209,6 +209,7 @@ function BoardView({ board, onRealtimeChange }) {
 }
 
 function App() {
+  const [wsOk, setWsOk] = useState(false);
   const [boards, setBoards] = useState([]);
   const [currentBoardId, setCurrentBoardId] = useState(null);
   const [currentBoard, setCurrentBoard] = useState(null);

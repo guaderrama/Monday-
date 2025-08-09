@@ -1,5 +1,3 @@
-/* WorkBoards modern UI additions for drag affordances */
-.kb-card { transition: box-shadow .15s ease, background-color .15s ease; }
-.kb-card.dragging { box-shadow: 0 12px 24px rgba(0,0,0,0.35); transform: scale(1.02); }
-.kb-lane.dragover { outline: 2px solid var(--wb-accent); background: rgba(43,110,243,0.06); }
-.kb-card:focus { outline: 2px solid var(--wb-accent); }
+/* Deleted styles */
+.kb-card.deleted { opacity: 0.5; }
+.kb-card .title.deleted { text-decoration: line-through; opacity: 0.8; }

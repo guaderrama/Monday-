@@ -34,13 +34,13 @@ app.add_middleware(
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-DEMO_USERS = {
-    "u-alex": "Alex",
-    "u-jordan": "Jordan",
-    "u-riley": "Riley",
-    "u-sam": "Sam",
-}
-NAME_TO_DEMO_ID = {v.lower(): k for k, v in DEMO_USERS.items()}
+# Demo users (can be renamed via members endpoints per workspace)
+SEED_MEMBERS = [
+    {"id": "u-alex", "username": "alex", "displayName": "Alex"},
+    {"id": "u-jordan", "username": "jordan", "displayName": "Jordan"},
+    {"id": "u-riley", "username": "riley", "displayName": "Riley"},
+    {"id": "u-sam", "username": "sam", "displayName": "Sam"},
+]
 
 async def get_ctx(workspace_id: Optional[str] = Header(None, alias="X-Workspace-Id"),
                   user_id: Optional[str] = Header(None, alias="X-User-Id")) -> Dict[str, str]:
@@ -105,6 +105,16 @@ async def ensure_workspace(ctx: Dict[str, str]):
         for i in range(1, 6+1):
             await db.items.insert_one(Item(boardId=board.id, groupId=g1.id, name=f"Task {i}", order=i, createdBy=ctx["user_id"], status="Todo").model_dump())
 
+async def ensure_members(workspace_id: str) -> List[Dict[str, Any]]:
+    existing = await db.members.find({"workspaceId": workspace_id}).to_list(20)
+    if existing:
+        return [strip_mongo(m) for m in existing]
+    for m in SEED_MEMBERS:
+        rec = {**m, "workspaceId": workspace_id}
+        await db.members.insert_one(rec)
+    existing = await db.members.find({"workspaceId": workspace_id}).to_list(20)
+    return [strip_mongo(m) for m in existing]
+
 def strip_mongo(doc: Dict[str, Any]) -> Dict[str, Any]:
     if not isinstance(doc, dict):
         return doc
@@ -116,9 +126,28 @@ def strip_mongo(doc: Dict[str, Any]) -> Dict[str, Any]:
 async def root():
     return {"message": "WorkBoards API running"}
 
+# Members endpoints
+@api.get("/members")
+async def get_members(ctx: Dict[str, str] = Depends(get_ctx)):
+    ms = await ensure_members(ctx["workspace_id"])
+    return ms
+
+class MemberPatch(BaseModel):
+    displayName: str
+
+@api.patch("/members/{member_id}")
+async def patch_member(member_id: str, body: MemberPatch, ctx: Dict[str, str] = Depends(get_ctx)):
+    await ensure_members(ctx["workspace_id"])  # seed if missing
+    await db.members.update_one({"workspaceId": ctx["workspace_id"], "id": member_id}, {"$set": {"displayName": body.displayName}})
+    m = await db.members.find_one({"workspaceId": ctx["workspace_id"], "id": member_id})
+    if not m:
+        raise HTTPException(status_code=404, detail="Member not found")
+    return strip_mongo(m)
+
 @api.get("/bootstrap")
 async def bootstrap(ctx: Dict[str, str] = Depends(get_ctx)):
     await ensure_workspace(ctx)
+    await ensure_members(ctx["workspace_id"])  # ensure members too
     ws_id = ctx["workspace_id"]
     boards = [strip_mongo(b) for b in await db.boards.find({"workspaceId": ws_id}).to_list(50)]
     for b in boards:
@@ -231,7 +260,7 @@ async def compact_lane(board_id: str, body: LanePayload, ctx: Dict[str, str] = D
     return {"compacted": len(changed)}
 
 @api.get("/export/items.csv")
-async def export_items_csv(boardId: str = Query(...), groupId: Optional[str] = Query(None), includeDeleted: Optional[int] = Query(0), ctx: Dict[str, str] = Depends(get_ctx)):
+async def export_items_csv(boardId: str = Query(...), groupId: Optional[str] = Query(None), includeDeleted: Optional[int] = Query(0), assigneeId: Optional[str] = Query(None), unassigned: Optional[int] = Query(0), ctx: Dict[str, str] = Depends(get_ctx)):
     board = await db.boards.find_one({"id": boardId})
     if not board:
         raise HTTPException(status_code=404, detail="Board not found")
@@ -241,35 +270,39 @@ async def export_items_csv(boardId: str = Query(...), groupId: Optional[str] = Q
     groups = await db.groups.find({"boardId": boardId}).to_list(1000)
     gmap = {g["id"]: g["name"] for g in groups}
 
+    # members for name mapping
+    members = await ensure_members(ctx["workspace_id"])
+    m_by_id = {m["id"]: m for m in members}
+
     q: Dict[str, Any] = {"boardId": boardId}
     if groupId:
         q["groupId"] = groupId
     if not includeDeleted:
         q["deleted"] = {"$ne": True}
+    if assigneeId:
+        q["assigneeId"] = assigneeId
+    elif unassigned:
+        q["$or"] = [{"assigneeId": {"$exists": False}}, {"assigneeId": None}, {"assigneeId": ""}]
+
     items = await db.items.find(q).sort("order", 1).to_list(5000)
 
     def row_iter():
-        sio = io.StringIO()
-        writer = csv.writer(sio)
+        sio = io.StringIO(); writer = csv.writer(sio)
         writer.writerow(["id","name","groupId","groupName","status","order","assigneeId","assigneeName","dueDate","createdAt","updatedAt","deleted"])
         yield sio.getvalue(); sio.seek(0); sio.truncate(0)
         for it in items:
             it = strip_mongo(it)
             gid = it.get("groupId"); gname = gmap.get(gid, "")
-            aid = it.get("assigneeId"); aname = DEMO_USERS.get(aid, "") if aid else ""
+            aid = it.get("assigneeId"); aname = m_by_id.get(aid, {}).get("displayName", "") if aid else ""
             due = it.get("dueDate"); due_s = ""
             if due:
                 try:
-                    if isinstance(due, str):
-                        due_s = due[:10]
-                    else:
-                        due_s = due.strftime("%Y-%m-%d")
+                    if isinstance(due, str): due_s = due[:10]
+                    else: due_s = due.strftime("%Y-%m-%d")
                 except: due_s = ""
             created = it.get("createdAt"); created_s = created.isoformat() if isinstance(created, datetime) else str(created)
             updated = it.get("updatedAt") or created; updated_s = updated.isoformat() if isinstance(updated, datetime) else str(updated)
-            writer.writerow([
-                it.get("id"), it.get("name"), gid, gname, it.get("status"), it.get("order"), aid or "", aname, due_s, created_s, updated_s, bool(it.get("deleted"))
-            ])
+            writer.writerow([it.get("id"), it.get("name"), gid, gname, it.get("status"), it.get("order"), aid or "", aname, due_s, created_s, updated_s, bool(it.get("deleted"))])
             yield sio.getvalue(); sio.seek(0); sio.truncate(0)
 
     headers = {"Content-Disposition": f"attachment; filename=items_{boardId}.csv"}
@@ -319,17 +352,6 @@ async def ws_board(websocket: WebSocket, board_id: str):
         manager.disconnect(board_id, websocket)
     except Exception:
         manager.disconnect(board_id, websocket)
-
-@api.post("/status")
-async def create_status_check(body: Dict[str, Any]):
-    status_obj = {"id": str(uuid.uuid4()), "client_name": body.get("client_name", "anon"), "timestamp": datetime.utcnow()}
-    await db.status_checks.insert_one(status_obj)
-    return status_obj
-
-@api.get("/status")
-async def get_status_checks():
-    status_checks = await db.status_checks.find().to_list(100)
-    return status_checks
 
 app.include_router(api)
 

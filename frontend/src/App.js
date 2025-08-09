@@ -10,17 +10,12 @@ import { Switch } from "./components/ui/switch";
 import { Label } from "./components/ui/label";
 import { Toaster } from "./components/ui/sonner";
 import { toast } from "sonner";
+import { Avatar, AvatarFallback } from "./components/ui/avatar";
 
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
 const API = `${BACKEND_URL}/api`;
 
 const STATUSES = ["Todo", "Doing", "Done"];
-const DEMO_USERS = [
-  { id: "u-alex", name: "Alex" },
-  { id: "u-jordan", name: "Jordan" },
-  { id: "u-riley", name: "Riley" },
-  { id: "u-sam", name: "Sam" },
-];
 
 const getAuthHeaders = () => {
   let ws = localStorage.getItem("wb.ws");
@@ -84,15 +79,20 @@ function StatusSelect({ value, onChange }) {
   );
 }
 
-function AssigneePicker({ value, onChange }) {
+function AssigneePicker({ members, value, onChange, size = 20 }) {
+  const selected = members.find(m => m.id === value);
+  const initials = selected ? (selected.displayName || selected.username).split(' ').map(w => w[0]).join('').toUpperCase().slice(0,2) : '•';
   return (
-    <Select value={value || ''} onValueChange={(v)=>onChange(v || null)}>
-      <SelectTrigger className="w-[140px]"><SelectValue placeholder="Assign" /></SelectTrigger>
-      <SelectContent>
-        <SelectItem value="">Unassigned</SelectItem>
-        {DEMO_USERS.map(u => <SelectItem key={u.id} value={u.id}>{u.name}</SelectItem>)}
-      </SelectContent>
-    </Select>
+    <div style={{ display:'flex', alignItems:'center', gap:8 }}>
+      <Avatar style={{ width:size, height:size }}><AvatarFallback>{initials}</AvatarFallback></Avatar>
+      <Select value={value || ''} onValueChange={(v)=>onChange(v || null)}>
+        <SelectTrigger className="w-[160px]"><SelectValue placeholder="Assign" /></SelectTrigger>
+        <SelectContent>
+          <SelectItem value="">Unassigned</SelectItem>
+          {members.map(u => <SelectItem key={u.id} value={u.id}>{u.displayName || u.username}</SelectItem>)}
+        </SelectContent>
+      </Select>
+    </div>
   );
 }
 
@@ -111,17 +111,21 @@ function DatePickerInline({ value, onChange }) {
   );
 }
 
-function BoardView({ board, onRealtimeChange, view }) {
+function BoardView({ board, onRealtimeChange }) {
   const [groups, setGroups] = useState([]);
   const [items, setItems] = useState([]);
+  const [members, setMembers] = useState([]);
+  const [assigneeFilter, setAssigneeFilter] = useState(() => localStorage.getItem(`wb.assigneeFilter:${board?.id}`) || 'all');
   const [focusId, setFocusId] = useState(null);
   const [showDeleted, setShowDeleted] = useState(() => localStorage.getItem(`wb.showDeleted:${board?.id}`) === '1');
+  const [view, setView] = useState(() => localStorage.getItem('wb.view') || 'kanban');
   const { connected } = useWebSocket(board?.id);
   useEffect(() => { onRealtimeChange?.(connected); }, [connected]);
 
   const refetch = React.useCallback(() => {
     if (!board) return; const h = getAuthHeaders();
     const params = showDeleted ? { includeDeleted: 1 } : {};
+    axios.get(`${API}/members`, { headers: h }).then(r => setMembers(r.data));
     axios.get(`${API}/boards/${board.id}/groups`, { headers: h }).then((r) => setGroups(r.data));
     axios.get(`${API}/boards/${board.id}/items`, { headers: h, params }).then((r) => setItems(r.data));
   }, [board?.id, showDeleted]);
@@ -139,26 +143,40 @@ function BoardView({ board, onRealtimeChange, view }) {
   }, [board?.id, showDeleted]);
 
   useEffect(() => { localStorage.setItem(`wb.showDeleted:${board?.id}`, showDeleted ? '1' : '0'); }, [showDeleted, board?.id]);
+  useEffect(() => { localStorage.setItem(`wb.assigneeFilter:${board?.id}`, assigneeFilter); }, [assigneeFilter, board?.id]);
+  useEffect(() => { localStorage.setItem('wb.view', view); }, [view]);
 
-  const laneItems = (groupId, status) => items.filter(it => it.groupId === groupId && it.status === status && (showDeleted || !it.deleted)).sort((a,b) => (a.order||0)-(b.order||0));
+  const assigneeMatches = (it) => {
+    if (assigneeFilter === 'all') return true;
+    if (assigneeFilter === 'unassigned') return !it.assigneeId;
+    return it.assigneeId === assigneeFilter;
+  };
+
+  const laneItems = (groupId, status) => items
+    .filter(it => it.groupId === groupId && it.status === status && (showDeleted || !it.deleted) && assigneeMatches(it))
+    .sort((a,b) => (a.order||0)-(b.order||0));
 
   const updateItem = async (item, patch) => { const h = getAuthHeaders(); const res = await axios.patch(`${API}/items/${item.id}`, patch, { headers: h }); return res.data; };
   const createItem = async (groupId, name, statusOpt) => { const h = getAuthHeaders(); const res = await axios.post(`${API}/boards/${board.id}/items`, { name, groupId, order: Date.now(), status: statusOpt }, { headers: h }); const it = res.data; setItems(prev => [...prev, it]); return it; };
 
+  const exportCSV = async () => {
+    if (!board) return; const h = getAuthHeaders();
+    const params = { boardId: board.id, includeDeleted: showDeleted ? 1 : 0 };
+    if (assigneeFilter === 'unassigned') params.unassigned = 1;
+    else if (assigneeFilter !== 'all') params.assigneeId = assigneeFilter;
+    const res = await axios.get(`${API}/export/items.csv`, { params, headers: h, responseType: 'blob' });
+    const blob = new Blob([res.data], { type: 'text/csv' }); const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = `items_${board.id}.csv`; document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
+  };
+
   const softDelete = async (item) => {
-    // optimistic: mark deleted
     setItems(prev => showDeleted ? prev.map(x => x.id === item.id ? { ...x, deleted: true, deletedAt: new Date().toISOString() } : x) : prev.filter(x => x.id !== item.id));
-    const h = getAuthHeaders(); const timerRef = { t: null };
-    const undo = async () => { if (timerRef.t) { clearTimeout(timerRef.t); timerRef.t = null; } const it = await updateItem(item, { deleted: false }); setItems(prev => { const exists = prev.some(x => x.id === it.id); return exists ? prev.map(x => x.id === it.id ? it : x) : [...prev, it]; }); };
+    const h = getAuthHeaders(); const undo = async () => { const it = await updateItem(item, { deleted: false }); setItems(prev => { const exists = prev.some(x => x.id === it.id); return exists ? prev.map(x => x.id === it.id ? it : x) : [...prev, it]; }); };
     toast("Item deleted", { action: { label: "Undo", onClick: undo }, duration: 5000 });
-    try { await axios.patch(`${API}/items/${item.id}`, { deleted: true }, { headers: h }); } catch (e) { await undo(); }
+    try { await axios.patch(`${API}/items/${item.id}`, { deleted: true }, { headers: h }); } catch { await undo(); }
   };
 
   // Keyboard delete
-  useEffect(() => {
-    const onKey = (e) => { if (!focusId) return; if (e.key === 'Delete') { const it = items.find(x => x.id === focusId); if (it) { e.preventDefault(); softDelete(it); } } };
-    window.addEventListener('keydown', onKey); return () => window.removeEventListener('keydown', onKey);
-  }, [focusId, items, showDeleted]);
+  useEffect(() => { const onKey = (e) => { if (!focusId) return; if (e.key === 'Delete') { const it = items.find(x => x.id === focusId); if (it) { e.preventDefault(); softDelete(it); } } }; window.addEventListener('keydown', onKey); return () => window.removeEventListener('keydown', onKey); }, [focusId, items, showDeleted]);
 
   const reorderCounter = useRef({});
   const maybeCompact = async (groupId, status, prev, next, idx) => { const key = `${groupId}:${status}`; reorderCounter.current[key] = (reorderCounter.current[key] || 0) + 1; const gap = next != null && prev != null ? Math.abs(next - prev) : 1; if (gap < 1e-3 || reorderCounter.current[key] % 10 === 0) { try { const h = getAuthHeaders(); await axios.post(`${API}/boards/${board.id}/order/compact`, { groupId, status }, { headers: h }); } catch {} } };
@@ -167,25 +185,28 @@ function BoardView({ board, onRealtimeChange, view }) {
 
   const [quickAdd, setQuickAdd] = useState({});
 
+  const memberById = (id) => members.find(m => m.id === id);
+  const initials = (name) => (name || '').split(' ').map(w => w[0]).join('').toUpperCase().slice(0,2) || '•';
+
   const KanbanCard = ({ it }) => {
     const [local, setLocal] = useState(it);
     useEffect(() => { setLocal(it); }, [it.id, it.name, it.status, it.assigneeId, it.dueDate, it.deleted]);
     const commit = async (patch) => { setItems(prev => prev.map(x => x.id === it.id ? { ...x, ...patch } : x)); const upd = await updateItem(it, patch); setItems(prev => prev.map(x => x.id === it.id ? upd : x)); };
+    const mem = memberById(local.assigneeId);
     return (
       <div className={`kb-card ${it.deleted ? 'deleted' : ''}`} draggable tabIndex={0} data-item-id={it.id}
-        onFocus={() => setFocusId(it.id)}
-        onDragStart={(e)=>{ e.currentTarget.classList.add('dragging'); e.dataTransfer.setData('text/plain', it.id); }}
-        onDragEnd={(e)=>{ e.currentTarget.classList.remove('dragging'); }}>
-        <div style={{ display:'flex', flexDirection:'column', gap:6, width:'45%' }}>
-          <EditableText value={local.name} onCommit={(v)=>commit({ name: v })} />
-          <AssigneePicker value={local.assigneeId || ''} onChange={(id)=>commit({ assigneeId: id || null })} />
+        onFocus={() => setFocusId(it.id)} onDragStart={(e)=>{ e.currentTarget.classList.add('dragging'); e.dataTransfer.setData('text/plain', it.id); }} onDragEnd={(e)=>{ e.currentTarget.classList.remove('dragging'); }}>
+        <div style={{ display:'flex', gap:8, alignItems:'center' }}>
+          <Avatar style={{ width:20, height:20 }}><AvatarFallback>{initials(mem?.displayName || mem?.username)}</AvatarFallback></Avatar>
+          <div style={{ display:'flex', flexDirection:'column', gap:6, width:'45%' }}>
+            <EditableText value={local.name} onCommit={(v)=>commit({ name: v })} />
+            <AssigneePicker members={members} value={local.assigneeId || ''} onChange={(id)=>commit({ assigneeId: id || null })} size={16} />
+          </div>
         </div>
         <div style={{ display:'flex', flexDirection:'column', gap:8, alignItems:'flex-end' }}>
           <StatusSelect value={local.status} onChange={(v)=>commit({ status: v })} />
           <DatePickerInline value={local.dueDate} onChange={(d)=>commit({ dueDate: d ? new Date(d).toISOString() : null })} />
-          <div>
-            <Button className="btn" onClick={() => softDelete(it)}>Delete</Button>
-          </div>
+          <div><Button className="btn" onClick={() => softDelete(it)}>Delete</Button></div>
         </div>
       </div>
     );
@@ -193,26 +214,44 @@ function BoardView({ board, onRealtimeChange, view }) {
 
   const statuses = STATUSES;
 
+  const HeaderControls = (
+    <div style={{ display:'flex', gap:12, alignItems:'center' }}>
+      <div className="small">Realtime: <span className={"ws-indicator" + (connected ? " ok" : "")} style={{ display:'inline-block', verticalAlign:'middle' }} /></div>
+      <div style={{ display:'flex', gap:8, alignItems:'center' }}>
+        <Label htmlFor="showdel" className="small">Show deleted</Label>
+        <Switch id="showdel" checked={showDeleted} onCheckedChange={setShowDeleted} />
+      </div>
+      <div style={{ display:'flex', gap:6, alignItems:'center' }}>
+        <span className="small">Assignee</span>
+        <Select value={assigneeFilter} onValueChange={setAssigneeFilter}>
+          <SelectTrigger className="w-[160px]"><SelectValue placeholder="All" /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">All</SelectItem>
+            <SelectItem value="unassigned">Unassigned</SelectItem>
+            {members.map(m => <SelectItem key={m.id} value={m.id}>{m.displayName || m.username}</SelectItem>)}
+          </SelectContent>
+        </Select>
+      </div>
+      <div style={{ display:'flex', gap:8, alignItems:'center' }}>
+        <Button className="btn" onClick={exportCSV}>Export CSV</Button>
+        <input id="wb-import-file" type="file" accept=".csv" style={{ display:'none' }} onChange={(e)=>handleFilePicked(e.target.files[0])} />
+        <Button className="btn" onClick={()=> document.getElementById('wb-import-file').click()}>Import CSV</Button>
+      </div>
+      <div style={{ display:'flex', gap:8, alignItems:'center', marginLeft:12 }}>
+        <Button className="btn" onClick={()=> setView('table')} style={{ opacity: view==='table'?1:0.6 }}>Table</Button>
+        <Button className="btn" onClick={()=> setView('kanban')} style={{ opacity: view==='kanban'?1:0.6 }}>Kanban</Button>
+      </div>
+    </div>
+  );
+
   const KanbanView = (
     <div className="content">
       <div className="board-area">
-        <div className="board-header">
-          <div className="board-title">{board.name}</div>
-          <div style={{ display:'flex', gap:12, alignItems:'center' }}>
-            <div className="small">Realtime: <span className={"ws-indicator" + (connected ? " ok" : "")} style={{ display:'inline-block', verticalAlign:'middle' }} /></div>
-            <div style={{ display:'flex', gap:8, alignItems:'center' }}>
-              <Label htmlFor="showdel" className="small">Show deleted</Label>
-              <Switch id="showdel" checked={showDeleted} onCheckedChange={setShowDeleted} />
-            </div>
-            <Button className="btn" onClick={async ()=>{ const h = getAuthHeaders(); const res = await axios.get(`${API}/export/items.csv`, { params: { boardId: board.id, includeDeleted: showDeleted ? 1 : 0 }, headers: h, responseType: 'blob' }); const blob = new Blob([res.data], { type: 'text/csv' }); const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = `items_${board.id}.csv`; document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url); }}>Export CSV</Button>
-            <input id="wb-import-file" type="file" accept=".csv" style={{ display:'none' }} onChange={(e)=>handleFilePicked(e.target.files[0])} />
-            <Button className="btn" onClick={()=> document.getElementById('wb-import-file').click()}>Import CSV</Button>
-          </div>
-        </div>
+        <div className="board-header"><div className="board-title">{board.name}</div>{HeaderControls}</div>
         <div className="kanban">
           {groups.map(g => (
             <div className="kb-swin" key={g.id}>
-              <div className="kb-head">{g.name} <span className="small">{items.filter(i=>i.groupId===g.id && (showDeleted || !i.deleted)).length} items</span></div>
+              <div className="kb-head">{g.name} <span className="small">{items.filter(i=>i.groupId===g.id && (showDeleted || !i.deleted) && assigneeMatches(i)).length} items</span></div>
               <div className="kb-row">
                 {statuses.map(st => (
                   <div key={st} className="kb-lane" data-lane={st} data-group={g.id}
@@ -238,16 +277,39 @@ function BoardView({ board, onRealtimeChange, view }) {
           ))}
         </div>
       </div>
-      <div className="item-panel"><div className="small">Tip: Delete key soft-deletes. Undo is available for 5s in the toast.</div></div>
+      <div className="item-panel"><div className="small">Filter: {assigneeFilter}</div></div>
     </div>
   );
 
-  // Export/Import helpers reused
-  const handleFilePicked = async (file) => { if (!file) return; const reader = new FileReader(); reader.onload = () => { const txt = reader.result.toString(); const lines = txt.split(/\r?\n/).slice(0, 6).filter(Boolean); if (!lines.length) return; const headers = lines[0].split(',').map(h => h.trim()); const rows = lines.slice(1).map(l => l.split(',')); alert(`Preview: ${headers.join(', ')}\nRows: ${rows.length}`); const h = getAuthHeaders(); const form = new FormData(); form.append('file', file); form.append('boardId', board.id); axios.post(`${API}/import/items.csv?boardId=${board.id}`, form, { headers: h }).then(res => { const data = res.data; toast.success(`Import created ${data.createdCount}. Errors: ${data.errorRows.length}`); if (data.errorRows.length) { const header = 'rowNumber,reason\n'; const csv = header + data.errorRows.map(e => `${e.rowNumber},"${e.reason.replaceAll('"','''')}"`).join('\n'); const blob = new Blob([csv], { type: 'text/csv' }); const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = 'errors.csv'; document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url); } }).finally(() => { setTimeout(() => { const params = showDeleted ? { includeDeleted: 1 } : {}; axios.get(`${API}/boards/${board.id}/items`, { headers: getAuthHeaders(), params }).then((r) => setItems(r.data)); }, 400); }); }; reader.readAsText(file); };
+  const TableView = (
+    <div className="content">
+      <div className="board-area">
+        <div className="board-header"><div className="board-title">{board.name}</div>{HeaderControls}</div>
+        {groups.map(g => (
+          <div key={g.id} className="group">
+            <h4>{g.name} • {items.filter(i=>i.groupId===g.id && (showDeleted || !i.deleted) && assigneeMatches(i)).length}</h4>
+            <Table className="table">
+              <TableHeader><TableRow><TableHead>Name</TableHead><TableHead>Status</TableHead><TableHead>Assignee</TableHead><TableHead>Due</TableHead></TableRow></TableHeader>
+              <TableBody>
+                {items.filter(i=>i.groupId===g.id && (showDeleted || !i.deleted) && assigneeMatches(i)).sort((a,b)=> (a.order||0)-(b.order||0)).map(it => (
+                  <TableRow key={it.id}>
+                    <TableCell><EditableText value={it.name} onCommit={async (v)=>{ const upd = await updateItem(it, { name: v }); setItems(prev => prev.map(x => x.id === upd.id ? upd : x)); }} /></TableCell>
+                    <TableCell><StatusSelect value={it.status} onChange={async (v)=>{ const upd = await updateItem(it, { status: v }); setItems(prev => prev.map(x => x.id === upd.id ? upd : x)); }} /></TableCell>
+                    <TableCell><AssigneePicker members={members} value={it.assigneeId || ''} onChange={async (id)=>{ const upd = await updateItem(it, { assigneeId: id || null }); setItems(prev => prev.map(x => x.id === upd.id ? upd : x)); }} /></TableCell>
+                    <TableCell className="small">{it.dueDate ? new Date(it.dueDate).toLocaleDateString() : '—'}</TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
+        ))}
+      </div>
+      <div className="item-panel" />
+    </div>
+  );
 
   if (!board) return <div style={{ padding: 20 }}>Select a board from the left.</div>;
-
-  return KanbanView; // default to Kanban in this simplified render
+  return view === 'kanban' ? KanbanView : TableView;
 }
 
 function App() {
@@ -255,18 +317,16 @@ function App() {
   const [currentBoardId, setCurrentBoardId] = useState(null);
   const [currentBoard, setCurrentBoard] = useState(null);
   const [wsOk, setWsOk] = useState(false);
-  const [view, setView] = useState(() => localStorage.getItem('wb.view') || 'kanban');
 
   useEffect(() => { const h = getAuthHeaders(); axios.get(`${API}/bootstrap`, { headers: h }).then((r) => { setBoards(r.data.boards || []); if (r.data.boards?.length) setCurrentBoardId(r.data.boards[0].id); }).catch((e) => console.error("bootstrap failed", e)); }, []);
   useEffect(() => { setCurrentBoard(boards.find(b => b.id === currentBoardId) || null); }, [boards, currentBoardId]);
-  useEffect(() => { localStorage.setItem('wb.view', view); }, [view]);
 
   return (
     <div className="app-shell">
       <Sidebar boards={boards} currentBoardId={currentBoardId} onSelect={setCurrentBoardId} />
       <main style={{ display:'flex', flexDirection:'column', minWidth:0 }}>
         {currentBoard && (
-          <BoardView board={currentBoard} onRealtimeChange={setWsOk} view={view} />
+          <BoardView board={currentBoard} onRealtimeChange={setWsOk} />
         )}
       </main>
       <Toaster position="bottom-right" />

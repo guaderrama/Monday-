@@ -132,7 +132,7 @@ async def bootstrap(ctx: Dict[str, str] = Depends(get_ctx)):
 
 # Boards
 @api.post("/boards", response_model=Board)
-async def create_board(body: Dict[str, Any], ctx: Dict[str, str] = fastapi.Depends(get_ctx)):
+async def create_board(body: Dict[str, Any], ctx: Dict[str, str] = Depends(get_ctx)):
     await ensure_workspace(ctx)
     board = Board(workspaceId=ctx["workspace_id"], name=body.get("name", "Untitled"), description=body.get("description"))
     await db.boards.insert_one(board.model_dump())

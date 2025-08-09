@@ -133,10 +133,11 @@ async def root():
 async def bootstrap(ctx: Dict[str, str] = Depends(get_ctx)):
     await ensure_workspace(ctx)
     ws_id = ctx["workspace_id"]
-    boards = await db.boards.find({"workspaceId": ws_id}).to_list(50)
-    # Return boards with groups and a count
+    boards = [strip_mongo(b) for b in await db.boards.find({"workspaceId": ws_id}).to_list(50)]
+    # Return boards with groups
     for b in boards:
-        b["groups"] = await db.groups.find({"boardId": b["id"]}).to_list(100)
+        groups = [strip_mongo(g) for g in await db.groups.find({"boardId": b["id"]}).to_list(100)]
+        b["groups"] = groups
     return {"workspaceId": ws_id, "boards": boards}
 
 # Boards

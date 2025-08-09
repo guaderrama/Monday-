@@ -187,7 +187,7 @@ function BoardView({ board, onRealtimeChange }) {
                       <input defaultValue={it.name} onBlur={async (e) => { if (e.target.value !== it.name) await updateItem(it, { name: e.target.value }); }} style={{ width:'100%', background:'transparent', border:'1px solid var(--wb-border)', borderRadius:8, padding:'6px 8px', color:'var(--wb-text)' }} />
                     </TableCell>
                     <TableCell>
-                      <span className={`status-pill status-${it.status}`} onClick={() => updateItem(it, { status: cycleStatus(it) })} style={{ cursor:'pointer' }}>{it.status}</span>
+                      <span className={`status-pill status-${it.status}`} onClick={async () => { const next = cycleStatus(it); const updated = await updateItem(it, { status: next }); setItems(prev => prev.map(x => x.id === updated.id ? updated : x)); }} style={{ cursor:'pointer' }}>{it.status}</span>
                     </TableCell>
                     <TableCell className="small">{it.dueDate ? new Date(it.dueDate).toLocaleDateString() : "—"}</TableCell>
                   </TableRow>
